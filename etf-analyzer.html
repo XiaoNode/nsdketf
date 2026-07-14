@@ -82,7 +82,7 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
 </head>
 <body>
 <div class="header">
-  <div><h1>&#128202; 纳斯达克100 QDII ETF 分析</h1><div class="sub">11只基金 &#183; 近两年逐日数据 &#183; 价格/净值/折溢价/费率</div></div>
+  <div><h1>&#128202; 纳斯达克100 QDII ETF 分析</h1><div class="sub" id="idxSub">逐日数据 &#183; 价格/净值/折溢价/费率</div></div>
   <div class="index-switch">
   <button class="index-switch-btn active" data-idx="ndx">&#127912; 纳斯达克100</button>
   <button class="index-switch-btn" data-idx="sp500">&#128200; 标普500</button>
@@ -160,48 +160,36 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
 <script src="sp500_data_2026-06.js"></script>
 <script src="sp500_data_2026-07.js"></script>
 <script>
-const ETF_DATA = (function(){
-  const merged = {};
+function collectMonthly(prefix, startYear, startMonth) {
   const months = [];
-  if (typeof ETF_DATA_202405 !== "undefined") months.push(ETF_DATA_202405);
-  if (typeof ETF_DATA_202406 !== "undefined") months.push(ETF_DATA_202406);
-  if (typeof ETF_DATA_202407 !== "undefined") months.push(ETF_DATA_202407);
-  if (typeof ETF_DATA_202408 !== "undefined") months.push(ETF_DATA_202408);
-  if (typeof ETF_DATA_202409 !== "undefined") months.push(ETF_DATA_202409);
-  if (typeof ETF_DATA_202410 !== "undefined") months.push(ETF_DATA_202410);
-  if (typeof ETF_DATA_202411 !== "undefined") months.push(ETF_DATA_202411);
-  if (typeof ETF_DATA_202412 !== "undefined") months.push(ETF_DATA_202412);
-  if (typeof ETF_DATA_202501 !== "undefined") months.push(ETF_DATA_202501);
-  if (typeof ETF_DATA_202502 !== "undefined") months.push(ETF_DATA_202502);
-  if (typeof ETF_DATA_202503 !== "undefined") months.push(ETF_DATA_202503);
-  if (typeof ETF_DATA_202504 !== "undefined") months.push(ETF_DATA_202504);
-  if (typeof ETF_DATA_202505 !== "undefined") months.push(ETF_DATA_202505);
-  if (typeof ETF_DATA_202506 !== "undefined") months.push(ETF_DATA_202506);
-  if (typeof ETF_DATA_202507 !== "undefined") months.push(ETF_DATA_202507);
-  if (typeof ETF_DATA_202508 !== "undefined") months.push(ETF_DATA_202508);
-  if (typeof ETF_DATA_202509 !== "undefined") months.push(ETF_DATA_202509);
-  if (typeof ETF_DATA_202510 !== "undefined") months.push(ETF_DATA_202510);
-  if (typeof ETF_DATA_202511 !== "undefined") months.push(ETF_DATA_202511);
-  if (typeof ETF_DATA_202512 !== "undefined") months.push(ETF_DATA_202512);
-  if (typeof ETF_DATA_202601 !== "undefined") months.push(ETF_DATA_202601);
-  if (typeof ETF_DATA_202602 !== "undefined") months.push(ETF_DATA_202602);
-  if (typeof ETF_DATA_202603 !== "undefined") months.push(ETF_DATA_202603);
-  if (typeof ETF_DATA_202604 !== "undefined") months.push(ETF_DATA_202604);
-  if (typeof ETF_DATA_202605 !== "undefined") months.push(ETF_DATA_202605);
-  if (typeof ETF_DATA_202606 !== "undefined") months.push(ETF_DATA_202606);
-  if (typeof ETF_DATA_202607 !== "undefined") months.push(ETF_DATA_202607);
+  const now = new Date();
+  let y = startYear, m = startMonth;
+  while (y < now.getFullYear() || (y === now.getFullYear() && m <= now.getMonth() + 1)) {
+    const ym = '' + y + (m < 10 ? '0' + m : m);
+    const vn = prefix + '_DATA_' + ym;
+    if (new Function('return typeof ' + vn)() !== 'undefined') {
+      months.push(new Function('return ' + vn)());
+    }
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return months;
+}
+function mergeMonthly(months) {
+  const merged = {};
   months.forEach(m => {
     Object.keys(m).forEach(code => {
+      const src = m[code];
       if (!merged[code]) {
-        const base = { ...m[code] };
-        base.price = [...(m[code].price || [])];
-        base.premium = [...(m[code].premium || [])];
-        base.nav = [...(m[code].nav || [])];
-        merged[code] = base;
+        merged[code] = {
+          ...src,
+          price: [...(src.price || [])],
+          premium: [...(src.premium || [])],
+          nav: [...(src.nav || [])]
+        };
       } else {
-        merged[code].price = merged[code].price.concat(m[code].price || []);
-        merged[code].premium = merged[code].premium.concat(m[code].premium || []);
-        merged[code].nav = merged[code].nav.concat(m[code].nav || []);
+        merged[code].price = merged[code].price.concat(src.price || []);
+        merged[code].premium = merged[code].premium.concat(src.premium || []);
+        merged[code].nav = merged[code].nav.concat(src.nav || []);
       }
     });
   });
@@ -211,65 +199,14 @@ const ETF_DATA = (function(){
     merged[code].nav.sort((a, b) => a.date.localeCompare(b.date));
   });
   return merged;
-})();
-
-const SP500_DATA = (function(){
-  const merged = {};
-  const months = [];
-  if (typeof SP500_DATA_202405 !== "undefined") months.push(SP500_DATA_202405);
-  if (typeof SP500_DATA_202406 !== "undefined") months.push(SP500_DATA_202406);
-  if (typeof SP500_DATA_202407 !== "undefined") months.push(SP500_DATA_202407);
-  if (typeof SP500_DATA_202408 !== "undefined") months.push(SP500_DATA_202408);
-  if (typeof SP500_DATA_202409 !== "undefined") months.push(SP500_DATA_202409);
-  if (typeof SP500_DATA_202410 !== "undefined") months.push(SP500_DATA_202410);
-  if (typeof SP500_DATA_202411 !== "undefined") months.push(SP500_DATA_202411);
-  if (typeof SP500_DATA_202412 !== "undefined") months.push(SP500_DATA_202412);
-  if (typeof SP500_DATA_202501 !== "undefined") months.push(SP500_DATA_202501);
-  if (typeof SP500_DATA_202502 !== "undefined") months.push(SP500_DATA_202502);
-  if (typeof SP500_DATA_202503 !== "undefined") months.push(SP500_DATA_202503);
-  if (typeof SP500_DATA_202504 !== "undefined") months.push(SP500_DATA_202504);
-  if (typeof SP500_DATA_202505 !== "undefined") months.push(SP500_DATA_202505);
-  if (typeof SP500_DATA_202506 !== "undefined") months.push(SP500_DATA_202506);
-  if (typeof SP500_DATA_202507 !== "undefined") months.push(SP500_DATA_202507);
-  if (typeof SP500_DATA_202508 !== "undefined") months.push(SP500_DATA_202508);
-  if (typeof SP500_DATA_202509 !== "undefined") months.push(SP500_DATA_202509);
-  if (typeof SP500_DATA_202510 !== "undefined") months.push(SP500_DATA_202510);
-  if (typeof SP500_DATA_202511 !== "undefined") months.push(SP500_DATA_202511);
-  if (typeof SP500_DATA_202512 !== "undefined") months.push(SP500_DATA_202512);
-  if (typeof SP500_DATA_202601 !== "undefined") months.push(SP500_DATA_202601);
-  if (typeof SP500_DATA_202602 !== "undefined") months.push(SP500_DATA_202602);
-  if (typeof SP500_DATA_202603 !== "undefined") months.push(SP500_DATA_202603);
-  if (typeof SP500_DATA_202604 !== "undefined") months.push(SP500_DATA_202604);
-  if (typeof SP500_DATA_202605 !== "undefined") months.push(SP500_DATA_202605);
-  if (typeof SP500_DATA_202606 !== "undefined") months.push(SP500_DATA_202606);
-  if (typeof SP500_DATA_202607 !== "undefined") months.push(SP500_DATA_202607);
-  months.forEach(m => {
-    Object.keys(m).forEach(code => {
-      if (!merged[code]) {
-        const base = { ...m[code] };
-        base.price = [...(m[code].price || [])];
-        base.premium = [...(m[code].premium || [])];
-        base.nav = [...(m[code].nav || [])];
-        merged[code] = base;
-      } else {
-        merged[code].price = merged[code].price.concat(m[code].price || []);
-        merged[code].premium = merged[code].premium.concat(m[code].premium || []);
-        merged[code].nav = merged[code].nav.concat(m[code].nav || []);
-      }
-    });
-  });
-  Object.keys(merged).forEach(code => {
-    merged[code].price.sort((a, b) => a.date.localeCompare(b.date));
-    merged[code].premium.sort((a, b) => a.date.localeCompare(b.date));
-    merged[code].nav.sort((a, b) => a.date.localeCompare(b.date));
-  });
-  return merged;
-})();
+}
+const ETF_DATA = mergeMonthly(collectMonthly('ETF', 2024, 5));
+const SP500_DATA = mergeMonthly(collectMonthly('SP500', 2024, 5));
 
 let currentIndex='ndx';
 const INDEX_DATA={ndx:ETF_DATA,sp500:SP500_DATA};
 const INDEX_NAMES={ndx:'纳斯达克100',sp500:'标普500'};
-const INDEX_SUBS={ndx:'11只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率',sp500:'4只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率'};
+const INDEX_SUBS={ndx:Object.keys(ETF_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率',sp500:Object.keys(SP500_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率'};
 let ETF_DATA_ACTIVE=ETF_DATA;
 
 function switchIndex(idx){
@@ -494,5 +431,6 @@ document.getElementById('chkAll').addEventListener('change',e=>{
   renderAll();
 });
 document.getElementById('updateTime').textContent='数据更新: '+new Date().toLocaleDateString('zh-CN')+' · 自动同步于 '+((function(){let d='';for(const c in ETF_DATA_ACTIVE){if(ETF_DATA_ACTIVE[c]&&ETF_DATA_ACTIVE[c].price&&ETF_DATA_ACTIVE[c].price.length>0){const l=ETF_DATA_ACTIVE[c].price[ETF_DATA_ACTIVE[c].price.length-1].date;if(l>d)d=l;}}return d||'未知';})());
+document.getElementById('idxSub').textContent=INDEX_SUBS[currentIndex];
 renderAll();
 </script></body></html>

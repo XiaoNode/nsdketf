@@ -9,7 +9,7 @@
 import json, os, re, urllib.request, time
 from datetime import datetime
 
-DIR = r'D:\nasdaq-sp500-etf-analyzer'
+DIR = os.path.dirname(os.path.abspath(__file__))
 HTML_PATH = os.path.join(DIR, 'etf-analyzer.html')
 
 CODE = 'sz159509'          # 新浪/场内代码
@@ -139,21 +139,11 @@ def main():
                 last = ms[-1]
                 html = html[:last.end()] + '\n    ' + tag + html[last.end():]
                 updated = True
-    # 2. 添加 Object.assign 合并行（若缺失）
-    for month in months:
-        var_name = f'ETF_DATA_{month.replace("-", "")}'
-        line = f'if (typeof {var_name} !== "undefined") Object.assign(ETF_DATA, {var_name});'
-        if line not in html:
-            pat = re.compile(r'if \(typeof ETF_DATA_\d{6} !== "undefined"\) Object\.assign\(ETF_DATA, ETF_DATA_\d{6}\);')
-            ms = list(pat.finditer(html))
-            if ms:
-                last = ms[-1]
-                html = html[:last.end()] + '\n    ' + line + html[last.end():]
-                updated = True
+    # 数据合并已改为前端动态收集（collectMonthly），只需保证 <script> 标签存在
     if updated:
         with open(HTML_PATH, 'w', encoding='utf-8') as f:
             f.write(html)
-        print('    [OK] 已在 etf-analyzer.html 注册脚本引用与合并逻辑')
+        print('    [OK] 已在 etf-analyzer.html 注册脚本引用')
     else:
         print('    [INFO] HTML 引用已存在，无需修改')
 

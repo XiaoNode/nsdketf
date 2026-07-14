@@ -11,12 +11,12 @@ DIR = os.path.dirname(os.path.abspath(__file__))
 HTML_PATH = os.path.join(DIR, 'etf-analyzer.html')
 HEADERS = {'User-Agent': 'Mozilla/5.0'}
 
-NASDAQ_CODES = [
-    'sh513100', 'sz159501', 'sz159941', 'sh513300', 'sz159659', 'sh513870',
-    'sz159632', 'sz159513', 'sz159696', 'sh513110', 'sh513390', 'sz159660',
-    'sz159509'
-]
-SP500_CODES = ['sh513500', 'sz159612', 'sz159655', 'sh513650']
+def load_codes(json_file):
+    """从全量JSON读取已收录的ETF代码，保证每日更新覆盖所有已录入标的。
+    新增ETF只需把数据写进对应JSON（参考 add_etf_159509.py），无需再改这里。"""
+    path = os.path.join(DIR, json_file)
+    with open(path, 'r', encoding='utf-8') as f:
+        return list(json.load(f).keys())
 
 def fetch_nav(code, days=20):
     """从天天基金获取最近N天净值"""
@@ -45,39 +45,25 @@ def fetch_price(code, days=20):
         return {}
 
 def update_html_scripts(month, prefix):
-    """向HTML中注入新月份的脚本引用"""
+    """向HTML中注入新月份的脚本引用。
+    数据合并已改为前端动态收集（collectMonthly），这里只需保证对应的 <script> 标签存在。"""
     with open(HTML_PATH, 'r', encoding='utf-8') as f:
         html = f.read()
-    
-    var_name = f'{prefix.upper()}_DATA_{month.replace("-", "")}'
+
     script_tag = f'<script src="{prefix}_data_{month}.js"></script>'
-    
-    # 检查是否已存在
     if script_tag in html:
         return
-        
+
     print(f"  [HTML] Adding {month} script reference to HTML...")
-    
-    # 1. 插入 <script src="...">
-    # 找到该类型的最后一个脚本位置
+
+    # 找到该类型的最后一个脚本位置，插入新月份标签
     pattern = rf'<script src="{prefix}_data_[\d-]+\.js"></script>'
     matches = list(re.finditer(pattern, html))
     if matches:
         last_match = matches[-1]
         html = html[:last_match.end()] + f'\n    {script_tag}' + html[last_match.end():]
-    
-    # 2. 插入 Object.assign(..., ...)
-    merge_line = f'if (typeof {var_name} !== "undefined") Object.assign({prefix.upper()}_DATA, {var_name});'
-    if merge_line not in html:
-        # 找到最后一个合并行
-        merge_pattern = rf'if \(typeof {prefix.upper()}_DATA_\d{{6}} !== "undefined"\) Object\.assign\({prefix.upper()}_DATA, {prefix.upper()}_DATA_\d{{6}}\);'
-        merges = list(re.finditer(merge_pattern, html))
-        if merges:
-            last_merge = merges[-1]
-            html = html[:last_merge.end()] + f'\n    {merge_line}' + html[last_merge.end():]
-
-    with open(HTML_PATH, 'w', encoding='utf-8') as f:
-        f.write(html)
+        with open(HTML_PATH, 'w', encoding='utf-8') as f:
+            f.write(html)
 
 def process_update(codes, json_file, prefix):
     json_path = os.path.join(DIR, json_file)
@@ -155,6 +141,6 @@ def process_update(codes, json_file, prefix):
 
 if __name__ == '__main__':
     print(f"ETF Daily Update Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    process_update(NASDAQ_CODES, 'etf_all.json', 'etf')
-    process_update(SP500_CODES, 'sp500_all.json', 'sp500')
+    process_update(load_codes('etf_all.json'), 'etf_all.json', 'etf')
+    process_update(load_codes('sp500_all.json'), 'sp500_all.json', 'sp500')
     print("\nGlobal update complete!")
