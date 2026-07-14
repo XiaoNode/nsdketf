@@ -8,7 +8,7 @@ from datetime import datetime
 # ========== 配置 ==========
 # 自动适配本地与 CI 环境：基于脚本所在目录解析项目根目录
 DIR = os.path.dirname(os.path.abspath(__file__))
-HTML_PATH = os.path.join(DIR, 'etf-analyzer.html')
+HTML_PATH = os.path.join(DIR, 'index.html')
 HEADERS = {'User-Agent': 'Mozilla/5.0'}
 
 def load_codes(json_file):

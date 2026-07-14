@@ -4,13 +4,13 @@
 - 计算折溢价率
 - 合并进 etf_all.json（全量）
 - 生成 2024-05 ~ 2026-07 月度 JS（与现有范围对齐）
-- 在 etf-analyzer.html 中注册该 ETF 的数据引用与合并逻辑（脚本标签 + Object.assign）
+- 在 index.html 中注册该 ETF 的数据引用（新增月份脚本标签）
 """
 import json, os, re, urllib.request, time
 from datetime import datetime
 
 DIR = os.path.dirname(os.path.abspath(__file__))
-HTML_PATH = os.path.join(DIR, 'etf-analyzer.html')
+HTML_PATH = os.path.join(DIR, 'index.html')
 
 CODE = 'sz159509'          # 新浪/场内代码
 PURE = '159509'            # 天天基金纯数字代码
@@ -143,7 +143,7 @@ def main():
     if updated:
         with open(HTML_PATH, 'w', encoding='utf-8') as f:
             f.write(html)
-        print('    [OK] 已在 etf-analyzer.html 注册脚本引用')
+        print('    [OK] 已在 index.html 注册脚本引用')
     else:
         print('    [INFO] HTML 引用已存在，无需修改')
 
