@@ -1,0 +1,71 @@
+name: Daily ETF Update
+
+on:
+  schedule:
+    # 北京时间每天 15:00（A股收盘后）运行 = UTC 07:00
+    - cron: '0 7 * * *'
+  workflow_dispatch:  # 允许手动触发
+
+permissions:
+  contents: write  # 允许 workflow 提交更新后的数据文件
+
+concurrency:
+  group: etf-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 需要完整历史以便 commit
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run daily update
+        run: python daily_update.py
+        env:
+          TZ: Asia/Shanghai  # 确保日期计算使用北京时间
+
+      - name: Check for changes
+        id: verify
+        run: |
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push updated data
+        if: steps.verify.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: auto-update ETF data [$(date +'%Y-%m-%d %Z')]"
+          git push
+
+      - name: Deploy to GitHub Pages
+        if: steps.verify.outputs.changed == 'true'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./
+          publish_branch: gh-pages
+          # 只发布前端需要的文件，避免把 .github / 脚本推到 Pages
+          exclude_assets: |
+            .github
+            daily_update.py
+            fetch_etf_data.py
+            fetch_etf_data_v2.py
+            add_etf_159509.py
+            requirements.txt
+            README.md
+            .gitignore
