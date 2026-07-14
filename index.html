@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>纳斯达克100 QDII ETF 分析工具</title>
+<script src="https://cdn.staticfile.org/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="https://cdn.staticfile.org/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js"></script>
+<script src="https://cdn.staticfile.org/hammer.js/2.0.8/hammer.min.js"></script>
+<style>
+:root{--bg:#0f1117;--surface:#1a1d27;--surface2:#22263a;--border:#2e3248;--accent:#4f7bff;--text:#e2e8f0;--text2:#8892a4;--green:#22c55e;--red:#ef4444;--gold:#f59e0b}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px}
+.header{padding:16px 24px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:100}
+.header h1{font-size:18px;font-weight:700;color:#fff}
+.header .sub{color:var(--text2);font-size:12px}
+.index-switch{display:flex;gap:8px;margin-left:auto;margin-right:16px}
+.index-switch-btn{padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;font-size:13px;transition:all .15s;font-weight:500}
+.index-switch-btn:hover{border-color:var(--accent);color:var(--accent)}
+.index-switch-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.update-time{color:var(--text2);font-size:12px}
+.container{display:grid;grid-template-columns:260px 1fr;height:calc(100vh - 57px)}
+.sidebar{background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;padding:12px}
+.sidebar-title{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.8px;padding:8px 4px 6px}
+.etf-item{padding:10px 12px;border-radius:8px;cursor:pointer;transition:background .15s;margin-bottom:4px;border:1px solid transparent;position:relative}
+.etf-item:hover{background:var(--surface2)}
+.etf-item.active{background:rgba(79,123,255,.12);border-color:rgba(79,123,255,.4)}
+.etf-name{font-size:13px;font-weight:600;color:var(--text)}
+.etf-code{font-size:11px;color:var(--text2);margin-top:2px}
+.etf-tags{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap}
+.tag{font-size:10px;padding:2px 6px;border-radius:4px}
+.tag-fee{background:rgba(79,123,255,.15);color:#7ba5ff}
+.tag-fee-low{background:rgba(34,197,94,.15);color:#4ade80}
+.tag-fee-high{background:rgba(239,68,68,.15);color:#f87171}
+.etf-price{font-size:15px;font-weight:700;color:#fff;margin-top:4px}
+.etf-premium-badge{font-size:11px;padding:2px 6px;border-radius:4px;display:inline-block;margin-top:4px}
+.premium-pos{background:rgba(239,68,68,.15);color:#f87171}
+.premium-neg{background:rgba(34,197,94,.15);color:#4ade80}
+.premium-zero{background:rgba(136,146,164,.15);color:var(--text2)}
+.select-all-row{display:flex;align-items:center;gap:8px;padding:6px 4px 10px;border-bottom:1px solid var(--border);margin-bottom:8px}
+.select-all-row label{font-size:12px;color:var(--text2);cursor:pointer}
+.main{display:flex;flex-direction:column;overflow:hidden}
+.tabs{display:flex;border-bottom:1px solid var(--border);background:var(--surface);padding:0 20px;flex-shrink:0}
+.tab{padding:12px 20px;cursor:pointer;font-size:13px;color:var(--text2);border-bottom:2px solid transparent;transition:all .15s;white-space:nowrap}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.chart-area{flex:1;padding:20px;overflow-y:auto}
+.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px}
+.chart-card h3{font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px}
+.chart-card .chart-desc{font-size:12px;color:var(--text2);margin-bottom:16px}
+.chart-wrapper{position:relative;height:340px}
+.info-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.info-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px}
+.card-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
+.card-name{font-size:13px;font-weight:700}
+.card-code{font-size:11px;color:var(--text2);margin-top:2px}
+.metric{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.metric:last-child{border-bottom:none}
+.metric-label{color:var(--text2);font-size:12px}
+.metric-value{font-size:12px;font-weight:600}
+.fee-bar{height:4px;border-radius:2px;background:var(--surface2);margin-top:10px;overflow:hidden}
+.fee-fill{height:100%;border-radius:2px;transition:width .3s}
+.range-btns{display:flex;gap:6px;margin-bottom:16px}
+.range-btn{padding:4px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;font-size:12px;transition:all .15s}
+.range-btn:hover{border-color:var(--accent);color:var(--accent)}
+.range-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.alert-warn{padding:10px 16px;border-radius:8px;margin-bottom:16px;font-size:12px;display:flex;align-items:center;gap:8px;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);color:#fbbf24}
+.alert-info{padding:10px 16px;border-radius:8px;margin-bottom:16px;font-size:12px;display:flex;align-items:center;gap:8px;background:rgba(79,123,255,.1);border:1px solid rgba(79,123,255,.3);color:#7ba5ff}
+input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--accent)}
+.check-wrap{position:absolute;top:10px;right:10px}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.premium-table{width:100%;border-collapse:collapse;font-size:12px}
+.premium-table th{background:var(--surface2);color:var(--text2);padding:8px 12px;text-align:left;font-weight:600}
+.premium-table td{padding:7px 12px;border-bottom:1px solid rgba(255,255,255,.04)}
+.premium-table tr:hover td{background:rgba(255,255,255,.02)}
+.pos-val{color:var(--red)}
+.neg-val{color:var(--green)}
+.zero-val{color:var(--text2)}
+</style>
+</head>
+<body>
+<div class="header">
+  <div><h1>&#128202; 纳斯达克100 QDII ETF 分析</h1><div class="sub" id="idxSub">逐日数据 &#183; 价格/净值/折溢价/费率</div></div>
+  <div class="index-switch">
+  <button class="index-switch-btn active" data-idx="ndx">&#127912; 纳斯达克100</button>
+  <button class="index-switch-btn" data-idx="sp500">&#128200; 标普500</button>
+</div>
+  <div class="update-time" id="updateTime"></div>
+</div>
+<div class="container">
+  <div class="sidebar">
+    <div class="sidebar-title">选择基金（可多选对比）</div>
+    <div class="select-all-row"><input type="checkbox" id="chkAll"><label for="chkAll">全选 / 取消全选</label></div>
+    <div id="etfList"></div>
+  </div>
+  <div class="main">
+    <div class="tabs">
+      <div class="tab active" data-tab="price">&#128200; 价格走势</div>
+      <div class="tab" data-tab="premium">&#128260; 折溢价率</div>
+      <div class="tab" data-tab="nav">&#128176; 净值走势</div>
+      <div class="tab" data-tab="info">&#128203; 基金信息</div>
+    </div>
+    <div class="chart-area" id="chartArea"></div>
+  </div>
+</div>
+<script src="etf_data_2024-05.js"></script>
+<script src="etf_data_2024-06.js"></script>
+<script src="etf_data_2024-07.js"></script>
+<script src="etf_data_2024-08.js"></script>
+<script src="etf_data_2024-09.js"></script>
+<script src="etf_data_2024-10.js"></script>
+<script src="etf_data_2024-11.js"></script>
+<script src="etf_data_2024-12.js"></script>
+<script src="etf_data_2025-01.js"></script>
+<script src="etf_data_2025-02.js"></script>
+<script src="etf_data_2025-03.js"></script>
+<script src="etf_data_2025-04.js"></script>
+<script src="etf_data_2025-05.js"></script>
+<script src="etf_data_2025-06.js"></script>
+<script src="etf_data_2025-07.js"></script>
+<script src="etf_data_2025-08.js"></script>
+<script src="etf_data_2025-09.js"></script>
+<script src="etf_data_2025-10.js"></script>
+<script src="etf_data_2025-11.js"></script>
+<script src="etf_data_2025-12.js"></script>
+<script src="etf_data_2026-01.js"></script>
+<script src="etf_data_2026-02.js"></script>
+<script src="etf_data_2026-03.js"></script>
+<script src="etf_data_2026-04.js"></script>
+<script src="etf_data_2026-05.js"></script>
+<script src="etf_data_2026-06.js"></script>
+<script src="etf_data_2026-07.js"></script>
+    <script src="etf_data_2023-08.js"></script>
+    <script src="etf_data_2022-10.js"></script>
+    <script src="etf_data_2024-02.js"></script>
+    <script src="etf_data_2022-08.js"></script>
+    <script src="etf_data_2022-09.js"></script>
+    <script src="etf_data_2022-05.js"></script>
+    <script src="etf_data_2023-01.js"></script>
+    <script src="etf_data_2024-04.js"></script>
+    <script src="etf_data_2024-03.js"></script>
+    <script src="etf_data_2024-01.js"></script>
+    <script src="etf_data_2023-06.js"></script>
+    <script src="etf_data_2023-10.js"></script>
+    <script src="etf_data_2023-09.js"></script>
+    <script src="etf_data_2022-06.js"></script>
+    <script src="etf_data_2023-03.js"></script>
+    <script src="etf_data_2023-11.js"></script>
+    <script src="etf_data_2023-12.js"></script>
+    <script src="etf_data_2023-04.js"></script>
+    <script src="etf_data_2022-11.js"></script>
+    <script src="etf_data_2023-07.js"></script>
+    <script src="etf_data_2022-07.js"></script>
+    <script src="etf_data_2023-05.js"></script>
+    <script src="etf_data_2022-12.js"></script>
+    <script src="etf_data_2023-02.js"></script>
+<script src="sp500_data_2024-05.js"></script>
+<script src="sp500_data_2024-06.js"></script>
+<script src="sp500_data_2024-07.js"></script>
+<script src="sp500_data_2024-08.js"></script>
+<script src="sp500_data_2024-09.js"></script>
+<script src="sp500_data_2024-10.js"></script>
+<script src="sp500_data_2024-11.js"></script>
+<script src="sp500_data_2024-12.js"></script>
+<script src="sp500_data_2025-01.js"></script>
+<script src="sp500_data_2025-02.js"></script>
+<script src="sp500_data_2025-03.js"></script>
+<script src="sp500_data_2025-04.js"></script>
+<script src="sp500_data_2025-05.js"></script>
+<script src="sp500_data_2025-06.js"></script>
+<script src="sp500_data_2025-07.js"></script>
+<script src="sp500_data_2025-08.js"></script>
+<script src="sp500_data_2025-09.js"></script>
+<script src="sp500_data_2025-10.js"></script>
+<script src="sp500_data_2025-11.js"></script>
+<script src="sp500_data_2025-12.js"></script>
+<script src="sp500_data_2026-01.js"></script>
+<script src="sp500_data_2026-02.js"></script>
+<script src="sp500_data_2026-03.js"></script>
+<script src="sp500_data_2026-04.js"></script>
+<script src="sp500_data_2026-05.js"></script>
+<script src="sp500_data_2026-06.js"></script>
+<script src="sp500_data_2026-07.js"></script>
+    <script src="sp500_data_2023-08.js"></script>
+    <script src="sp500_data_2022-10.js"></script>
+    <script src="sp500_data_2024-02.js"></script>
+    <script src="sp500_data_2022-08.js"></script>
+    <script src="sp500_data_2022-09.js"></script>
+    <script src="sp500_data_2022-05.js"></script>
+    <script src="sp500_data_2023-01.js"></script>
+    <script src="sp500_data_2024-04.js"></script>
+    <script src="sp500_data_2024-03.js"></script>
+    <script src="sp500_data_2024-01.js"></script>
+    <script src="sp500_data_2023-06.js"></script>
+    <script src="sp500_data_2023-10.js"></script>
+    <script src="sp500_data_2023-09.js"></script>
+    <script src="sp500_data_2022-06.js"></script>
+    <script src="sp500_data_2023-03.js"></script>
+    <script src="sp500_data_2023-11.js"></script>
+    <script src="sp500_data_2023-12.js"></script>
+    <script src="sp500_data_2023-04.js"></script>
+    <script src="sp500_data_2022-11.js"></script>
+    <script src="sp500_data_2023-07.js"></script>
+    <script src="sp500_data_2022-07.js"></script>
+    <script src="sp500_data_2023-05.js"></script>
+    <script src="sp500_data_2022-12.js"></script>
+    <script src="sp500_data_2023-02.js"></script>
+<script>
+function collectMonthly(prefix, startYear, startMonth) {
+  const months = [];
+  const now = new Date();
+  let y = startYear, m = startMonth;
+  while (y < now.getFullYear() || (y === now.getFullYear() && m <= now.getMonth() + 1)) {
+    const ym = '' + y + (m < 10 ? '0' + m : m);
+    const vn = prefix + '_DATA_' + ym;
+    if (new Function('return typeof ' + vn)() !== 'undefined') {
+      months.push(new Function('return ' + vn)());
+    }
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return months;
+}
+function mergeMonthly(months) {
+  const merged = {};
+  months.forEach(m => {
+    Object.keys(m).forEach(code => {
+      const src = m[code];
+      if (!merged[code]) {
+        merged[code] = {
+          ...src,
+          price: [...(src.price || [])],
+          premium: [...(src.premium || [])],
+          nav: [...(src.nav || [])]
+        };
+      } else {
+        merged[code].price = merged[code].price.concat(src.price || []);
+        merged[code].premium = merged[code].premium.concat(src.premium || []);
+        merged[code].nav = merged[code].nav.concat(src.nav || []);
+      }
+    });
+  });
+  Object.keys(merged).forEach(code => {
+    merged[code].price.sort((a, b) => a.date.localeCompare(b.date));
+    merged[code].premium.sort((a, b) => a.date.localeCompare(b.date));
+    merged[code].nav.sort((a, b) => a.date.localeCompare(b.date));
+  });
+  return merged;
+}
+const ETF_DATA = mergeMonthly(collectMonthly('ETF', 2024, 5));
+const SP500_DATA = mergeMonthly(collectMonthly('SP500', 2024, 5));
+
+let currentIndex='ndx';
+const INDEX_DATA={ndx:ETF_DATA,sp500:SP500_DATA};
+const INDEX_NAMES={ndx:'纳斯达克100',sp500:'标普500'};
+const INDEX_SUBS={ndx:Object.keys(ETF_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率',sp500:Object.keys(SP500_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率'};
+let ETF_DATA_ACTIVE=ETF_DATA;
+
+function switchIndex(idx){
+  if(idx===currentIndex)return;
+  currentIndex=idx;
+  ETF_DATA_ACTIVE=INDEX_DATA[idx];
+  ETF_CODES.length=0;
+  ETF_CODES.push(...Object.keys(ETF_DATA_ACTIVE));
+  selectedCodes.clear();
+  selectedCodes.add(ETF_CODES[0]);
+  if(ETF_CODES.length>1)selectedCodes.add(ETF_CODES[1]);
+  currentRange='1y';
+  document.querySelectorAll('.index-switch-btn').forEach(b=>{
+    b.classList.toggle('active',b.dataset.idx===idx);
+  });
+  document.querySelector('h1').innerHTML='&#128202; '+INDEX_NAMES[idx]+' QDII ETF 分析';
+  document.querySelector('.sub').textContent=INDEX_SUBS[idx];
+  renderAll();
+}
+const COLORS=['#4f7bff','#f59e0b','#22c55e','#ef4444','#a78bfa','#06b6d4','#f97316','#ec4899','#84cc16','#14b8a6','#e879f9','#64748b'];
+const ETF_CODES=Object.keys(ETF_DATA_ACTIVE);
+let selectedCodes=new Set([ETF_CODES[0],ETF_CODES[1]]);
+let currentTab='price';
+let currentRange='1y';
+let charts={};
+
+function filterByRange(arr,range){
+  if(!arr||!arr.length)return arr;
+  const now=new Date();let cutoff;
+  if(range==='3m'){cutoff=new Date(now);cutoff.setMonth(cutoff.getMonth()-3);}
+  else if(range==='6m'){cutoff=new Date(now);cutoff.setMonth(cutoff.getMonth()-6);}
+  else if(range==='1y'){cutoff=new Date(now);cutoff.setFullYear(cutoff.getFullYear()-1);}
+  else return arr;
+  const cs=cutoff.toISOString().slice(0,10);
+  return arr.filter(d=>d.date>=cs);
+}
+function getLatestPremium(code){const a=ETF_DATA_ACTIVE[code].premium;return(!a||!a.length)?null:a[a.length-1].value;}
+function getLatestPrice(code){const a=ETF_DATA_ACTIVE[code].price;return(!a||!a.length)?null:a[a.length-1].value;}
+function premiumClass(v){if(v===null)return'zero-val';if(v>0.5)return'pos-val';if(v<-0.5)return'neg-val';return'zero-val';}
+function premiumBadgeClass(v){if(v===null)return'premium-zero';if(v>0.5)return'premium-pos';if(v<-0.5)return'premium-neg';return'premium-zero';}
+function feeColor(f){if(f<=0.60)return'#22c55e';if(f<=0.65)return'#84cc16';if(f<=0.80)return'#f59e0b';return'#ef4444';}
+
+function renderSidebar(){
+  const c=document.getElementById('etfList');c.innerHTML='';
+  ETF_CODES.forEach((code,i)=>{
+    const etf=ETF_DATA_ACTIVE[code];
+    const price=getLatestPrice(code);const prem=getLatestPremium(code);
+    const isSelected=selectedCodes.has(code);const color=COLORS[i%COLORS.length];
+    const feeTag=etf.fee_total<=0.60?'tag-fee-low':etf.fee_total>=1.0?'tag-fee-high':'tag-fee';
+    const item=document.createElement('div');
+    item.className='etf-item'+(isSelected?' active':'');
+    item.dataset.code=code;
+    const priceHtml=price?`<div class="etf-price" style="color:${color}">&#165;${price.toFixed(3)}</div>`:'';
+    const premHtml=prem!==null?`<span class="etf-premium-badge ${premiumBadgeClass(prem)}">${prem>0?'+':''}${prem.toFixed(2)}%</span>`:'';
+    item.innerHTML=`<div class="check-wrap"><input type="checkbox" data-code="${code}" ${isSelected?'checked':''}></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-right:24px">
+        <div style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0"></div>
+        <div><div class="etf-name">${etf.name}</div><div class="etf-code">${code.toUpperCase()}</div></div>
+      </div>
+      ${priceHtml}
+      <div class="etf-tags"><span class="tag ${feeTag}">${etf.fee_total}%/年</span>${premHtml}</div>`;
+    item.addEventListener('click',e=>{if(e.target.type==='checkbox')return;toggleSelect(code);});
+    item.querySelector('input[type=checkbox]').addEventListener('change',e=>{
+      if(e.target.checked)selectedCodes.add(code);else selectedCodes.delete(code);renderAll();
+    });
+    c.appendChild(item);
+  });
+  const ca=document.getElementById('chkAll');
+  ca.checked=selectedCodes.size===ETF_CODES.length;
+  ca.indeterminate=selectedCodes.size>0&&selectedCodes.size<ETF_CODES.length;
+}
+function toggleSelect(code){
+  if(selectedCodes.has(code)){if(selectedCodes.size>1)selectedCodes.delete(code);}
+  else selectedCodes.add(code);
+  renderAll();
+}
+function renderAll(){
+  renderSidebar();
+  if(currentTab==='price')renderPriceTab();
+  else if(currentTab==='premium')renderPremiumTab();
+  else if(currentTab==='nav')renderNavTab();
+  else if(currentTab==='info')renderInfoTab();
+}
+function renderRangeBtns(active){
+  const rs=[['3m','3个月'],['6m','6个月'],['1y','1年'],['all','全部']];
+  return '<div class="range-btns">'+rs.map(([r,l])=>`<button class="range-btn ${active===r?'active':''}" data-range="${r}">${l}</button>`).join('')+'</div>';
+}
+function bindRangeBtns(){
+  document.querySelectorAll('.range-btn').forEach(b=>b.addEventListener('click',()=>{currentRange=b.dataset.range;renderAll();}));
+}
+function destroyChart(id){if(charts[id]){charts[id].destroy();delete charts[id];}}
+
+function makeLineChart(canvasId,labels,datasets,yFmt){
+  destroyChart(canvasId);
+  const ctx=document.getElementById(canvasId).getContext('2d');
+  charts[canvasId]=new Chart(ctx,{
+    type:'line',
+    data:{labels,datasets},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{color:'#8892a4',font:{size:12},boxWidth:12,padding:16}},
+        tooltip:{backgroundColor:'#1a1d27',borderColor:'#2e3248',borderWidth:1,titleColor:'#e2e8f0',bodyColor:'#8892a4',padding:10,
+          callbacks:{label:c=>` ${c.dataset.label}: ${yFmt(c.parsed.y)}`}},
+        zoom:{zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'},pan:{enabled:true,mode:'x'}}
+      },
+      scales:{
+        x:{ticks:{color:'#8892a4',maxTicksLimit:12,font:{size:11},maxRotation:30},grid:{color:'rgba(255,255,255,0.04)'}},
+        y:{ticks:{color:'#8892a4',font:{size:11},callback:yFmt},grid:{color:'rgba(255,255,255,0.06)'}}
+      }
+    }
+  });
+}
+
+function buildDatasets(key){
+  const result=[];
+  Array.from(selectedCodes).forEach(code=>{
+    const etf=ETF_DATA_ACTIVE[code];const color=COLORS[ETF_CODES.indexOf(code)%COLORS.length];
+    const filtered=filterByRange(etf[key],currentRange);
+    result.push({label:etf.name,rawData:filtered,color});
+  });
+  const allDates=[...new Set(result.flatMap(d=>d.rawData.map(p=>p.date)))].sort();
+  const datasets=result.map(d=>{
+    const map=Object.fromEntries(d.rawData.map(p=>[p.date,p.value]));
+    return{label:d.label,data:allDates.map(dt=>map[dt]??null),borderColor:d.color,backgroundColor:d.color+'12',borderWidth:1.8,pointRadius:0,tension:0.3};
+  });
+  return{allDates,datasets};
+}
+
+function renderPriceTab(){
+  document.getElementById('chartArea').innerHTML=
+    renderRangeBtns(currentRange)+
+    '<div class="alert-info"><span>&#128161;</span>各ETF面值不同，价格绝对值不可直接比较涨幅。如需比较涨幅请切换"净值走势"查看归一化曲线。</div>'+
+    '<div class="chart-card"><h3>市场价格走势（收盘价）</h3><div class="chart-desc">每交易日收盘价 &#183; 可滚轮缩放/拖拽</div><div class="chart-wrapper"><canvas id="chartPrice"></canvas></div></div>';
+  bindRangeBtns();
+  const {allDates,datasets}=buildDatasets('price');
+  makeLineChart('chartPrice',allDates,datasets,v=>v!=null?'&#165;'+v.toFixed(3):'-');
+}
+
+function renderPremiumTab(){
+  let trs='';
+  ETF_CODES.forEach((code,i)=>{
+    const etf=ETF_DATA_ACTIVE[code];const prem=getLatestPremium(code);
+    const arr=filterByRange(etf.premium,currentRange);
+    const avg=arr.length?(arr.reduce((s,d)=>s+d.value,0)/arr.length).toFixed(3):'-';
+    const maxP=arr.length?Math.max(...arr.map(d=>d.value)).toFixed(2):'-';
+    const minP=arr.length?Math.min(...arr.map(d=>d.value)).toFixed(2):'-';
+    const isSel=selectedCodes.has(code);
+    const bg=isSel?'background:rgba(79,123,255,0.06)':'';
+    const latestStr=prem!==null?(prem>0?'+':'')+prem.toFixed(4)+'%':'-';
+    const avgStr=avg!=='-'?(Number(avg)>0?'+':'')+avg+'%':'-';
+    const maxStr=maxP!=='-'?'+'+maxP+'%':'-';
+    const minStr=minP!=='-'?minP+'%':'-';
+    trs+=`<tr style="${bg}"><td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${COLORS[i%COLORS.length]};margin-right:6px"></span>${etf.name}</td><td class="${premiumClass(prem)}">${latestStr}</td><td>${avgStr}</td><td class="pos-val">${maxStr}</td><td class="neg-val">${minStr}</td></tr>`;
+  });
+  document.getElementById('chartArea').innerHTML=
+    renderRangeBtns(currentRange)+
+    '<div class="alert-warn"><span>&#9888;</span>溢价 &gt; 1% 时慎买，折价 &lt; -1% 时为买入机会。QDII ETF因额度限制有时长期处于溢价。</div>'+
+    '<div class="chart-card"><h3>折溢价率走势</h3><div class="chart-desc">溢价率 = (市价 - 净值) / 净值 &#215; 100%，正值=溢价，负值=折价</div><div class="chart-wrapper"><canvas id="chartPremium"></canvas></div></div>'+
+    '<div class="chart-card"><h3>折溢价统计对比（'+(currentRange==='3m'?'近3个月':currentRange==='6m'?'近6个月':currentRange==='1y'?'近1年':'全部')+'）</h3><div class="chart-desc">最新值 / 均值 / 最高最低</div>'+
+    '<table class="premium-table"><thead><tr><th>基金</th><th>最新溢价率</th><th>年均值</th><th>年内最高</th><th>年内最低</th></tr></thead><tbody>'+trs+'</tbody></table></div>';
+  bindRangeBtns();
+  const {allDates,datasets}=buildDatasets('premium');
+  makeLineChart('chartPremium',allDates,datasets,v=>v!=null?v.toFixed(3)+'%':'-');
+}
+
+function renderNavTab(){
+  document.getElementById('chartArea').innerHTML=
+    renderRangeBtns(currentRange)+
+    '<div class="alert-info"><span>&#128161;</span>净值不受溢价影响，反映真实资产变动。归一化图以所选时段起点=100为基准，可直接比较涨幅。</div>'+
+    '<div class="chart-card"><h3>净值归一化走势（起始=100）</h3><div class="chart-desc">反映真实收益率差异</div><div class="chart-wrapper"><canvas id="chartNavNorm"></canvas></div></div>'+
+    '<div class="chart-card"><h3>净值绝对值走势</h3><div class="chart-desc">每日公布净值（IOPV）原始数据</div><div class="chart-wrapper"><canvas id="chartNavRaw"></canvas></div></div>';
+  bindRangeBtns();
+  const allCodes=Array.from(selectedCodes);
+  const normSets=[];const rawSets=[];
+  allCodes.forEach(code=>{
+    const etf=ETF_DATA_ACTIVE[code];const color=COLORS[ETF_CODES.indexOf(code)%COLORS.length];
+    const filtered=filterByRange(etf.nav,currentRange);
+    if(!filtered.length)return;
+    const base=filtered[0].value;
+    normSets.push({label:etf.name,rawData:filtered.map(d=>({date:d.date,value:parseFloat((d.value/base*100).toFixed(4))})),color});
+    rawSets.push({label:etf.name,rawData:filtered,color});
+  });
+  function buildFixed(sets){
+    const allDates=[...new Set(sets.flatMap(d=>d.rawData.map(p=>p.date)))].sort();
+    const datasets=sets.map(d=>{
+      const map=Object.fromEntries(d.rawData.map(p=>[p.date,p.value]));
+      return{label:d.label,data:allDates.map(dt=>map[dt]??null),borderColor:d.color,backgroundColor:d.color+'12',borderWidth:1.8,pointRadius:0,tension:0.3};
+    });
+    return{allDates,datasets};
+  }
+  const n=buildFixed(normSets);const r=buildFixed(rawSets);
+  makeLineChart('chartNavNorm',n.allDates,n.datasets,v=>v!=null?v.toFixed(2):'');
+  makeLineChart('chartNavRaw',r.allDates,r.datasets,v=>v!=null?v.toFixed(4):'');
+}
+
+function renderInfoTab(){
+  const cards=ETF_CODES.map((code,i)=>{
+    const etf=ETF_DATA_ACTIVE[code];const color=COLORS[i%COLORS.length];
+    const price=getLatestPrice(code);const prem=getLatestPremium(code);
+    const feeW=((etf.fee_total-0.60)/(1.05-0.60)*100).toFixed(0);
+    const isSel=selectedCodes.has(code);
+    const borderStyle=isSel?'border-color:'+color+'55':'';
+    const priceHtml=price?`<div style="font-size:15px;font-weight:700;color:#fff">&#165;${price.toFixed(3)}</div>`:'';
+    const premHtml=prem!==null?`<div class="${premiumBadgeClass(prem)} etf-premium-badge">${prem>0?'+':''}${prem.toFixed(2)}%</div>`:'';
+    return`<div class="info-card" style="${borderStyle}"><div class="card-header"><div><div class="card-name" style="color:${color}">${etf.name}</div><div class="card-code">${code.toUpperCase()} &#183; NDX100</div></div><div style="text-align:right">${priceHtml}${premHtml}</div></div><div class="metric"><span class="metric-label">规模（亿元）</span><span class="metric-value" style="color:#fbbf24">${etf.size}</span></div><div class="metric"><span class="metric-label">综合费率</span><span class="metric-value" style="color:${feeColor(etf.fee_total)}">${etf.fee_total}%/年</span></div><div class="metric"><span class="metric-label">管理费</span><span class="metric-value">${etf.fee_mgmt}%</span></div><div class="metric"><span class="metric-label">托管费</span><span class="metric-value">${etf.fee_cust}%</span></div><div class="metric"><span class="metric-label">销售服务费</span><span class="metric-value">${etf.fee_svc}%</span></div><div class="fee-bar"><div class="fee-fill" style="width:${feeW}%;background:${feeColor(etf.fee_total)}"></div></div></div>`;
+  }).join('');
+  document.getElementById('chartArea').innerHTML=
+    '<div class="alert-info" style="margin-bottom:16px"><span>&#128161;</span>费率进度条越长=费率越高。溢价徽章：红=溢价，绿=折价。</div>'+
+    '<div class="info-grid">'+cards+'</div>';
+}
+
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');currentTab=t.dataset.tab;renderAll();
+}));
+document.querySelectorAll('.index-switch-btn').forEach(b=>b.addEventListener('click',()=>switchIndex(b.dataset.idx)));
+document.getElementById('chkAll').addEventListener('change',e=>{
+  if(e.target.checked)ETF_CODES.forEach(c=>selectedCodes.add(c));
+  else{selectedCodes.clear();selectedCodes.add(ETF_CODES[0]);}
+  renderAll();
+});
+document.getElementById('updateTime').textContent='数据更新: '+new Date().toLocaleDateString('zh-CN')+' · 自动同步于 '+((function(){let d='';for(const c in ETF_DATA_ACTIVE){if(ETF_DATA_ACTIVE[c]&&ETF_DATA_ACTIVE[c].price&&ETF_DATA_ACTIVE[c].price.length>0){const l=ETF_DATA_ACTIVE[c].price[ETF_DATA_ACTIVE[c].price.length-1].date;if(l>d)d=l;}}return d||'未知';})());
+document.getElementById('idxSub').textContent=INDEX_SUBS[currentIndex];
+renderAll();
+</script></body></html>
