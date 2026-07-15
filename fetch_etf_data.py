@@ -33,7 +33,7 @@ NASDAQ_ETFS = {
     "sh513110": {"name": "华泰柏瑞纳斯达克100ETF", "code": "513110", "market": "sh", "type": "nasdaq"},
     "sh513390": {"name": "博时纳斯达克100ETF", "code": "513390", "market": "sh", "type": "nasdaq"},
     "sz159660": {"name": "汇添富纳斯达克100ETF", "code": "159660", "market": "sz", "type": "nasdaq"},
-    "sz159509": {"name": "纳指科技ETF景顺", "code": "159509", "market": "sz", "type": "nasdaq"},
+    "sz159509": {"name": "纳斯达克科技市值加权ETF景顺", "code": "159509", "market": "sz", "type": "nasdaq"},
 }
 
 SP500_ETFS = {
