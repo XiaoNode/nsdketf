@@ -19,9 +19,11 @@
 ```
 nasdaq-sp500-etf-analyzer/
 ├── .github/workflows/daily-update.yml  # 每日自动更新 + 部署 Pages
-├── etf-analyzer.html                   # 前端单页应用
+├── index.html                          # 前端单页应用
 ├── etf_all.json / sp500_all.json       # 完整历史数据
-├── etf_data_YYYY-MM.js / sp500_data_YYYY-MM.js  # 按月拆分的前端数据
+├── data/                               # 按月拆分的前端数据
+│   ├── etf_data_YYYY-MM.js             # 纳斯达克100月度数据
+│   └── sp500_data_YYYY-MM.js           # 标普500月度数据
 ├── daily_update.py                     # 每日更新脚本（标准库，无需依赖）
 ├── fetch_etf_data.py / fetch_etf_data_v2.py  # 历史数据一次性抓取
 └── requirements.txt                    # 仅标准库
@@ -37,7 +39,7 @@ python daily_update.py
 
 GitHub Actions 每日北京时间 15:00 自动运行 `daily_update.py`，提交更新后的数据文件并部署到 GitHub Pages。
 
-Pages 地址：`https://<username>.github.io/<repo-name>/etf-analyzer.html`
+Pages 地址：`https://<username>.github.io/<repo-name>/`
 
 ## 已收录 ETF
 

@@ -3,7 +3,7 @@
 - 抓取新浪价格 + 天天基金净值（历史上全量）
 - 计算折溢价率
 - 合并进 etf_all.json（全量）
-- 生成 2024-05 ~ 2026-07 月度 JS（与现有范围对齐）
+- 生成 2024-05 ~ 2026-07 月度 JS 到 data/（与现有范围对齐）
 - 在 index.html 中注册该 ETF 的数据引用（新增月份脚本标签）
 """
 import json, os, re, urllib.request, time
@@ -11,6 +11,7 @@ from datetime import datetime
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 HTML_PATH = os.path.join(DIR, 'index.html')
+DATA_DIR = os.path.join(DIR, 'data')
 
 CODE = 'sz159509'          # 新浪/场内代码
 PURE = '159509'            # 天天基金纯数字代码
@@ -107,7 +108,8 @@ def main():
             'premium': [i for i in premium_list if i['date'].startswith(month)],
         }}
         var_name = f'ETF_DATA_{month.replace("-", "")}'
-        js_path = os.path.join(DIR, f'etf_data_{month}.js')
+        js_path = os.path.join(DATA_DIR, f'etf_data_{month}.js')
+        os.makedirs(DATA_DIR, exist_ok=True)
         # 该月 JS 已存在则合并进原文件（其它 ETF 数据保留）
         base = {}
         if os.path.exists(js_path):
@@ -128,12 +130,12 @@ def main():
     with open(HTML_PATH, 'r', encoding='utf-8') as f:
         html = f.read()
     updated = False
-    # 1. 添加 <script src="etf_data_2024-05.js"> 已在，需确保每月都有
+    # 1. 添加 <script src="data/etf_data_2024-05.js"> 已在，需确保每月都有
     for month in months:
-        tag = f'<script src="etf_data_{month}.js"></script>'
+        tag = f'<script src="data/etf_data_{month}.js"></script>'
         if tag not in html:
             # 找同类型最后一个插入
-            pat = re.compile(r'<script src="etf_data_[\d-]+\.js"></script>')
+            pat = re.compile(r'<script src="data/etf_data_[\d-]+\.js"></script>')
             ms = list(pat.finditer(html))
             if ms:
                 last = ms[-1]

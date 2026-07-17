@@ -9,6 +9,7 @@ from datetime import datetime
 # 自动适配本地与 CI 环境：基于脚本所在目录解析项目根目录
 DIR = os.path.dirname(os.path.abspath(__file__))
 HTML_PATH = os.path.join(DIR, 'index.html')
+DATA_DIR = os.path.join(DIR, 'data')
 HEADERS = {'User-Agent': 'Mozilla/5.0'}
 
 def load_codes(json_file):
@@ -19,15 +20,27 @@ def load_codes(json_file):
         return list(json.load(f).keys())
 
 def fetch_nav(code, days=20):
-    """从天天基金获取最近N天净值"""
+    """从天天基金获取最近N天净值。
+    注：原 F10DataApi.aspx 接口已失效（需 Referer 且返回空），
+    现改用 api.fund.eastmoney.com/f10/lsjz（带 Referer 可正常返回 JSON）。"""
     pure_code = code[2:]
-    url = f'https://fundf10.eastmoney.com/F10DataApi.aspx?type=lsjz&code={pure_code}&page=1&per={days}'
+    url = (f'https://api.fund.eastmoney.com/f10/lsjz?callback=x&fundCode={pure_code}'
+           f'&pageIndex=1&pageSize={days}&startDate=&endDate=')
     try:
-        req = urllib.request.Request(url, headers=HEADERS)
+        nav_headers = {**HEADERS,
+                       'Referer': f'https://fundf10.eastmoney.com/F10/jjjz_{pure_code}.html'}
+        req = urllib.request.Request(url, headers=nav_headers)
         with urllib.request.urlopen(req, timeout=15) as resp:
-            text = resp.read().decode('utf-8')
-        rows = re.findall(r'<tr><td>(\d{4}-\d{2}-\d{2})</td><td[^>]*>([\d\.]+)</td>', text)
-        return {r[0]: float(r[1]) for r in rows}
+            text = resp.read().decode('utf-8').strip()
+        # 剥离 jsonp 包裹：x({...})
+        if text.startswith('x('):
+            text = text[2:]
+        if text.endswith(')'):
+            text = text[:-1]
+        data = json.loads(text)
+        lsjz = data.get('Data', {}).get('LSJZList', [])
+        return {item['FSRQ']: float(item['DWJZ'])
+                for item in lsjz if item.get('FSRQ') and item.get('DWJZ')}
     except Exception as e:
         print(f"    [Error] Fetching NAV for {code}: {e}")
         return {}
@@ -50,14 +63,14 @@ def update_html_scripts(month, prefix):
     with open(HTML_PATH, 'r', encoding='utf-8') as f:
         html = f.read()
 
-    script_tag = f'<script src="{prefix}_data_{month}.js"></script>'
+    script_tag = f'<script src="data/{prefix}_data_{month}.js"></script>'
     if script_tag in html:
         return
 
     print(f"  [HTML] Adding {month} script reference to HTML...")
 
     # 找到该类型的最后一个脚本位置，插入新月份标签
-    pattern = rf'<script src="{prefix}_data_[\d-]+\.js"></script>'
+    pattern = rf'<script src="data/{prefix}_data_[\d-]+\.js"></script>'
     matches = list(re.finditer(pattern, html))
     if matches:
         last_match = matches[-1]
@@ -129,7 +142,8 @@ def process_update(codes, json_file, prefix):
             }
         
         if any(subset[c]['price'] for c in subset):
-            js_path = os.path.join(DIR, f'{prefix}_data_{month}.js')
+            js_path = os.path.join(DATA_DIR, f'{prefix}_data_{month}.js')
+            os.makedirs(DATA_DIR, exist_ok=True)
             var_name = f'{prefix.upper()}_DATA_{month.replace("-", "")}'
             # 跨月检测与HTML更新
             if not os.path.exists(js_path):
