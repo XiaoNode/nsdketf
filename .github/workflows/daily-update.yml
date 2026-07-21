@@ -34,6 +34,9 @@ jobs:
         env:
           TZ: Asia/Shanghai  # 确保日期计算使用北京时间
 
+      - name: Validate generated data
+        run: python -m unittest discover -s tests -v
+
       - name: Check for changes
         id: verify
         run: |
@@ -66,6 +69,7 @@ jobs:
             fetch_etf_data.py
             fetch_etf_data_v2.py
             add_etf_159509.py
+            tests
             requirements.txt
             README.md
             .gitignore
