@@ -37,6 +37,9 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang 
 .premium-pos{background:rgba(239,68,68,.15);color:#f87171}
 .premium-neg{background:rgba(34,197,94,.15);color:#4ade80}
 .premium-zero{background:rgba(136,146,164,.15);color:var(--text2)}
+.extreme-high{background:rgba(239,68,68,.24);color:#fca5a5;border:1px solid rgba(239,68,68,.35);font-weight:700}
+.extreme-low{background:rgba(34,197,94,.22);color:#86efac;border:1px solid rgba(34,197,94,.35);font-weight:700}
+.rank-excluded{background:rgba(136,146,164,.12);color:var(--text2)}
 .select-all-row{display:flex;align-items:center;gap:8px;padding:6px 4px 10px;border-bottom:1px solid var(--border);margin-bottom:8px}
 .select-all-row label{font-size:12px;color:var(--text2);cursor:pointer}
 .main{display:flex;flex-direction:column;overflow:hidden}
@@ -253,6 +256,7 @@ const SP500_DATA = mergeMonthly(collectMonthly('SP500', 2024, 5));
 
 let currentIndex='ndx';
 const INDEX_DATA={ndx:ETF_DATA,sp500:SP500_DATA};
+const PREMIUM_RANKING_EXCLUSIONS={ndx:new Set(['sz159509']),sp500:new Set()};
 const INDEX_NAMES={ndx:'纳斯达克100',sp500:'标普500'};
 const INDEX_SUBS={ndx:Object.keys(ETF_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率',sp500:Object.keys(SP500_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率'};
 let ETF_DATA_ACTIVE=ETF_DATA;
@@ -291,31 +295,49 @@ function filterByRange(arr,range){
   const cs=cutoff.toISOString().slice(0,10);
   return arr.filter(d=>d.date>=cs);
 }
-function getLatestPremium(code){const a=ETF_DATA_ACTIVE[code].premium;return(!a||!a.length)?null:a[a.length-1].value;}
+function getLatestPremiumRecord(code){const a=ETF_DATA_ACTIVE[code].premium;return(!a||!a.length)?null:a[a.length-1];}
+function getLatestPremium(code){const r=getLatestPremiumRecord(code);return r===null?null:r.value;}
 function getLatestPrice(code){const a=ETF_DATA_ACTIVE[code].price;return(!a||!a.length)?null:a[a.length-1].value;}
+function getLatestDate(key){
+  let latest='';
+  for(const code in ETF_DATA_ACTIVE){
+    const arr=ETF_DATA_ACTIVE[code]&&ETF_DATA_ACTIVE[code][key];
+    if(arr&&arr.length&&arr[arr.length-1].date>latest)latest=arr[arr.length-1].date;
+  }
+  return latest||'未知';
+}
+function updateFreshness(){
+  document.getElementById('updateTime').textContent='数据截止: 价格 '+getLatestDate('price')+' · 净值 '+getLatestDate('nav');
+}
 function premiumClass(v){if(v===null)return'zero-val';if(v>0.5)return'pos-val';if(v<-0.5)return'neg-val';return'zero-val';}
 function premiumBadgeClass(v){if(v===null)return'premium-zero';if(v>0.5)return'premium-pos';if(v<-0.5)return'premium-neg';return'premium-zero';}
 function feeColor(f){if(f<=0.60)return'#22c55e';if(f<=0.65)return'#84cc16';if(f<=0.80)return'#f59e0b';return'#ef4444';}
 
 function renderSidebar(){
   const c=document.getElementById('etfList');c.innerHTML='';
+  const rankingExclusions=PREMIUM_RANKING_EXCLUSIONS[currentIndex]||new Set();
+  const currentPremiums=ETF_CODES.filter(code=>!rankingExclusions.has(code)).map(code=>getLatestPremium(code)).filter(value=>value!==null&&Number.isFinite(value));
+  const highestPremium=currentPremiums.length?Math.max(...currentPremiums):null;
+  const lowestPremium=currentPremiums.length?Math.min(...currentPremiums):null;
   ETF_CODES.forEach((code,i)=>{
     const etf=ETF_DATA_ACTIVE[code];
-    const price=getLatestPrice(code);const prem=getLatestPremium(code);
+    const price=getLatestPrice(code);const premRecord=getLatestPremiumRecord(code);const prem=premRecord===null?null:premRecord.value;
     const isSelected=selectedCodes.has(code);const color=COLORS[i%COLORS.length];
     const feeTag=etf.fee_total<=0.60?'tag-fee-low':etf.fee_total>=1.0?'tag-fee-high':'tag-fee';
+    const excludedHtml=rankingExclusions.has(code)?'<span class="tag rank-excluded">不参与排名</span>':'';
+    const extremeHtml=!rankingExclusions.has(code)&&(prem===highestPremium?'<span class="tag extreme-high">溢价最高</span>':prem===lowestPremium?'<span class="tag extreme-low">溢价最低</span>':'');
     const item=document.createElement('div');
     item.className='etf-item'+(isSelected?' active':'');
     item.dataset.code=code;
     const priceHtml=price?`<div class="etf-price" style="color:${color}">&#165;${price.toFixed(3)}</div>`:'';
-    const premHtml=prem!==null?`<span class="etf-premium-badge ${premiumBadgeClass(prem)}">${prem>0?'+':''}${prem.toFixed(2)}%</span>`:'';
+    const premHtml=prem!==null?`<span class="etf-premium-badge ${premiumBadgeClass(prem)}" title="使用净值日期 ${premRecord.nav_date||premRecord.date}">${prem>0?'+':''}${prem.toFixed(2)}%</span>`:'';
     item.innerHTML=`<div class="check-wrap"><input type="checkbox" data-code="${code}" ${isSelected?'checked':''}></div>
       <div style="display:flex;align-items:center;gap:8px;margin-right:24px">
         <div style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0"></div>
         <div><div class="etf-name">${etf.name}</div><div class="etf-code">${code.toUpperCase()}</div></div>
       </div>
       ${priceHtml}
-      <div class="etf-tags"><span class="tag ${feeTag}">${etf.fee_total}%/年</span>${premHtml}</div>`;
+      <div class="etf-tags"><span class="tag ${feeTag}">${etf.fee_total}%/年</span>${premHtml}${excludedHtml}${extremeHtml}</div>`;
     item.addEventListener('click',e=>{if(e.target.type==='checkbox')return;toggleSelect(code);});
     item.querySelector('input[type=checkbox]').addEventListener('change',e=>{
       if(e.target.checked)selectedCodes.add(code);else selectedCodes.delete(code);renderAll();
@@ -332,6 +354,7 @@ function toggleSelect(code){
   renderAll();
 }
 function renderAll(){
+  updateFreshness();
   renderSidebar();
   if(currentTab==='price')renderPriceTab();
   else if(currentTab==='premium')renderPremiumTab();
@@ -398,7 +421,7 @@ function renderPriceTab(){
 function renderPremiumTab(){
   let trs='';
   ETF_CODES.forEach((code,i)=>{
-    const etf=ETF_DATA_ACTIVE[code];const prem=getLatestPremium(code);
+    const etf=ETF_DATA_ACTIVE[code];const premRecord=getLatestPremiumRecord(code);const prem=premRecord===null?null:premRecord.value;
     const arr=filterByRange(etf.premium,currentRange);
     const avg=arr.length?(arr.reduce((s,d)=>s+d.value,0)/arr.length).toFixed(3):'-';
     const maxP=arr.length?Math.max(...arr.map(d=>d.value)).toFixed(2):'-';
@@ -409,14 +432,15 @@ function renderPremiumTab(){
     const avgStr=avg!=='-'?(Number(avg)>0?'+':'')+avg+'%':'-';
     const maxStr=maxP!=='-'?'+'+maxP+'%':'-';
     const minStr=minP!=='-'?minP+'%':'-';
-    trs+=`<tr style="${bg}"><td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${COLORS[i%COLORS.length]};margin-right:6px"></span>${etf.name}</td><td class="${premiumClass(prem)}">${latestStr}</td><td>${avgStr}</td><td class="pos-val">${maxStr}</td><td class="neg-val">${minStr}</td></tr>`;
+    const navDate=premRecord?(premRecord.nav_date||premRecord.date):'-';
+    trs+=`<tr style="${bg}"><td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${COLORS[i%COLORS.length]};margin-right:6px"></span>${etf.name}</td><td class="${premiumClass(prem)}">${latestStr}</td><td>${navDate}</td><td>${avgStr}</td><td class="pos-val">${maxStr}</td><td class="neg-val">${minStr}</td></tr>`;
   });
   document.getElementById('chartArea').innerHTML=
     renderRangeBtns(currentRange)+
     '<div class="alert-warn"><span>&#9888;</span>溢价 &gt; 1% 时慎买，折价 &lt; -1% 时为买入机会。QDII ETF因额度限制有时长期处于溢价。</div>'+
     '<div class="chart-card"><h3>折溢价率走势</h3><div class="chart-desc">溢价率 = (市价 - 净值) / 净值 &#215; 100%，正值=溢价，负值=折价</div><div class="chart-wrapper"><canvas id="chartPremium"></canvas></div></div>'+
     '<div class="chart-card"><h3>折溢价统计对比（'+(currentRange==='3m'?'近3个月':currentRange==='6m'?'近6个月':currentRange==='1y'?'近1年':'全部')+'）</h3><div class="chart-desc">最新值 / 均值 / 最高最低</div>'+
-    '<table class="premium-table"><thead><tr><th>基金</th><th>最新溢价率</th><th>年均值</th><th>年内最高</th><th>年内最低</th></tr></thead><tbody>'+trs+'</tbody></table></div>';
+    '<table class="premium-table"><thead><tr><th>基金</th><th>最新溢价率</th><th>使用净值日期</th><th>区间均值</th><th>区间最高</th><th>区间最低</th></tr></thead><tbody>'+trs+'</tbody></table></div>';
   bindRangeBtns();
   const {allDates,datasets}=buildDatasets('premium');
   makeLineChart('chartPremium',allDates,datasets,v=>v!=null?v.toFixed(3)+'%':'-');
@@ -425,9 +449,9 @@ function renderPremiumTab(){
 function renderNavTab(){
   document.getElementById('chartArea').innerHTML=
     renderRangeBtns(currentRange)+
-    '<div class="alert-info"><span>&#128161;</span>净值不受溢价影响，反映真实资产变动。归一化图以所选时段起点=100为基准，可直接比较涨幅。</div>'+
+    '<div class="alert-info"><span>&#128161;</span>净值采用基金公司公布的单位净值，并保留真实发布日期。归一化图以所选时段起点=100为基准，可直接比较涨幅。</div>'+
     '<div class="chart-card"><h3>净值归一化走势（起始=100）</h3><div class="chart-desc">反映真实收益率差异</div><div class="chart-wrapper"><canvas id="chartNavNorm"></canvas></div></div>'+
-    '<div class="chart-card"><h3>净值绝对值走势</h3><div class="chart-desc">每日公布净值（IOPV）原始数据</div><div class="chart-wrapper"><canvas id="chartNavRaw"></canvas></div></div>';
+    '<div class="chart-card"><h3>净值绝对值走势</h3><div class="chart-desc">基金公司公布的单位净值原始数据（非盘中 IOPV）</div><div class="chart-wrapper"><canvas id="chartNavRaw"></canvas></div></div>';
   bindRangeBtns();
   const allCodes=Array.from(selectedCodes);
   const normSets=[];const rawSets=[];
@@ -478,7 +502,6 @@ document.getElementById('chkAll').addEventListener('change',e=>{
   else{selectedCodes.clear();selectedCodes.add(ETF_CODES[0]);}
   renderAll();
 });
-document.getElementById('updateTime').textContent='数据更新: '+new Date().toLocaleDateString('zh-CN')+' · 自动同步于 '+((function(){let d='';for(const c in ETF_DATA_ACTIVE){if(ETF_DATA_ACTIVE[c]&&ETF_DATA_ACTIVE[c].price&&ETF_DATA_ACTIVE[c].price.length>0){const l=ETF_DATA_ACTIVE[c].price[ETF_DATA_ACTIVE[c].price.length-1].date;if(l>d)d=l;}}return d||'未知';})());
 document.getElementById('idxSub').textContent=INDEX_SUBS[currentIndex];
 renderAll();
 </script></body></html>
