@@ -1,5 +1,6 @@
 import argparse
 import bisect
+import copy
 import json
 import math
 import os
@@ -171,6 +172,74 @@ def changed_data_months(before, after):
     return changed
 
 
+def changed_data_months_all(original, updated):
+    """Collect months that changed between two full all_data dictionaries."""
+    changed = set()
+    for code in original:
+        if code not in updated:
+            continue
+        changed.update(changed_data_months(original[code], updated[code]))
+    return changed
+
+
+def normalize_group_premiums(all_data, codes):
+    """Recompute premiums using the latest common NAV date for the group.
+
+    QDII ETF NAVs are published at different times across fund companies.  For a
+    cross-ETF comparison chart, using the newest per-fund NAV for each price date
+    can make some funds appear to jump while others still use an older NAV.  This
+    function finds the latest NAV date that is available for **all** funds in the
+    group and uses that date for the tail of the premium series so the displayed
+    series share a uniform NAV cutoff.  Earlier dates continue to use the latest
+    available NAV per fund.
+    """
+    if not codes:
+        return
+
+    nav_date_sets = []
+    for code in codes:
+        dates = {item['date'] for item in all_data.get(code, {}).get('nav', [])
+                 if is_valid_date(item.get('date'))}
+        nav_date_sets.append(dates)
+
+    common_dates = set.intersection(*nav_date_sets)
+    if not common_dates:
+        return
+
+    common_date = max(common_dates)
+
+    for code in codes:
+        info = all_data.get(code)
+        if not info:
+            continue
+
+        nav_dict = {item['date']: item['value'] for item in info.get('nav', [])}
+        price_arr = info.get('price', [])
+        premium_arr = []
+        rejected = []
+
+        for price in price_arr:
+            pdate = price['date']
+            pval = price['value']
+
+            if pdate > common_date:
+                ndate = common_date
+            else:
+                valid = [d for d in nav_dict if d <= pdate]
+                if not valid:
+                    continue
+                ndate = max(valid)
+
+            nval = nav_dict[ndate]
+            premium = round((pval / nval - 1) * 100, 4)
+            if abs(premium) > MAX_ABS_PREMIUM:
+                rejected.append((pdate, premium))
+                continue
+            premium_arr.append({'date': pdate, 'value': premium, 'nav_date': ndate})
+
+        info['premium'] = premium_arr
+
+
 def merge_etf_data(info, prices, navs, replace_all_nav=False):
     """Merge source data while preserving NAV publication dates."""
     updated = dict(info)
@@ -264,7 +333,7 @@ def prepare_update(codes, json_file, full_nav=False):
     with open(json_path, 'r', encoding='utf-8') as f:
         all_data = json.load(f)
 
-    changed_months = set()
+    original_all_data = copy.deepcopy(all_data)
     failures = []
     print(f'\n>>> Preparing {json_file} ({len(codes)} ETFs)...')
     for code in codes:
@@ -280,15 +349,17 @@ def prepare_update(codes, json_file, full_nav=False):
                 navs = fetch_nav(code, start_date=start_date)
             else:
                 navs = fetch_nav(code)
-            updated, months, rejected = merge_etf_data(
+            updated, _, rejected = merge_etf_data(
                 info, prices, navs, replace_all_nav=full_nav
             )
             all_data[code] = updated
-            changed_months.update(months)
             for date, premium in rejected:
                 print(f'    [Warning] Skipped implausible premium {premium:.4f}% on {date}')
         except Exception as exc:
             failures.append(f'{code}: {exc}')
+
+    normalize_group_premiums(all_data, codes)
+    changed_months = changed_data_months_all(original_all_data, all_data)
 
     return {
         'codes': codes,
