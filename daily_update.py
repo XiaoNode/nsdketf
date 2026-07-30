@@ -9,7 +9,7 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 DIR = os.path.dirname(os.path.abspath(__file__))
@@ -182,6 +182,15 @@ def changed_data_months_all(original, updated):
     return changed
 
 
+def previous_trading_day(date_str):
+    """Return the previous weekday (Mon-Fri) before date_str."""
+    d = datetime.strptime(date_str, '%Y-%m-%d').date()
+    while True:
+        d -= timedelta(days=1)
+        if d.weekday() < 5:
+            return d.strftime('%Y-%m-%d')
+
+
 def normalize_group_premiums(all_data, codes):
     """Recompute premiums using the latest common NAV date for the group.
 
@@ -192,6 +201,12 @@ def normalize_group_premiums(all_data, codes):
     group and uses that date for the tail of the premium series so the displayed
     series share a uniform NAV cutoff.  Earlier dates continue to use the latest
     available NAV per fund.
+
+    If the newest common NAV is older than the previous trading day for the
+    latest price date, the latest price date's premium is dropped rather than
+    shown with a stale NAV.  This prevents QDII ETFs from displaying a T-day
+    premium computed from a T-2 (or earlier) NAV simply because some funds have
+    not yet published T-1 NAV.
     """
     if not codes:
         return
@@ -207,6 +222,19 @@ def normalize_group_premiums(all_data, codes):
         return
 
     common_date = max(common_dates)
+
+    latest_price_date = None
+    for code in codes:
+        info = all_data.get(code)
+        if info and info.get('price'):
+            candidate = max(p['date'] for p in info['price'])
+            if latest_price_date is None or candidate > latest_price_date:
+                latest_price_date = candidate
+    if latest_price_date:
+        expected_nav_date = previous_trading_day(latest_price_date)
+        stale_tail = common_date < expected_nav_date
+    else:
+        stale_tail = False
 
     for code in codes:
         info = all_data.get(code)
@@ -229,6 +257,12 @@ def normalize_group_premiums(all_data, codes):
                 if not valid:
                     continue
                 ndate = max(valid)
+
+            if stale_tail and pdate == latest_price_date and ndate < expected_nav_date:
+                print(f"    [Warning] {code}: latest price date {pdate} expects NAV "
+                      f"{expected_nav_date}, but newest common NAV is {common_date}; "
+                      "dropping stale premium")
+                continue
 
             nval = nav_dict[ndate]
             premium = round((pval / nval - 1) * 100, 4)
