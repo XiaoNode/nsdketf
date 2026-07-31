@@ -2,8 +2,8 @@ name: Daily ETF Update
 
 on:
   schedule:
-    # 北京时间每天 15:00（A股收盘后）运行 = UTC 07:00
-    - cron: '0 7 * * *'
+    # 北京时间每天 21:30（净值披露完成后）运行 = UTC 13:30
+    - cron: '30 13 * * *'
   workflow_dispatch:  # 允许手动触发
 
 permissions:
