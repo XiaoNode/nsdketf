@@ -104,6 +104,7 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
       <div class="tab" data-tab="premium">&#128260; 折溢价率</div>
       <div class="tab" data-tab="nav">&#128176; 净值走势</div>
       <div class="tab" data-tab="info">&#128203; 基金信息</div>
+      <div class="tab" data-tab="valuation" id="tabValuation">&#128202; 估值参考</div>
     </div>
     <div class="chart-area" id="chartArea"></div>
   </div>
@@ -210,6 +211,7 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
     <script src="data/sp500_data_2023-05.js"></script>
     <script src="data/sp500_data_2022-12.js"></script>
     <script src="data/sp500_data_2023-02.js"></script>
+    <script src="data/ndx_valuation.js"></script>
 <script>
 function collectMonthly(prefix, startYear, startMonth) {
   const months = [];
@@ -276,6 +278,14 @@ function switchIndex(idx){
   });
   document.querySelector('h1').innerHTML='&#128202; '+INDEX_NAMES[idx]+' QDII ETF 分析';
   document.querySelector('.sub').textContent=INDEX_SUBS[idx];
+  const tv=document.getElementById('tabValuation');
+  if(tv)tv.style.display=idx==='ndx'?'':'none';
+  if(idx!=='ndx'&&currentTab==='valuation'){
+    currentTab='price';
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    const pt=document.querySelector('.tab[data-tab="price"]');
+    if(pt)pt.classList.add('active');
+  }
   renderAll();
 }
 const COLORS=['#4f7bff','#f59e0b','#22c55e','#ef4444','#a78bfa','#06b6d4','#f97316','#ec4899','#84cc16','#14b8a6','#e879f9','#64748b'];
@@ -360,6 +370,7 @@ function renderAll(){
   else if(currentTab==='premium')renderPremiumTab();
   else if(currentTab==='nav')renderNavTab();
   else if(currentTab==='info')renderInfoTab();
+  else if(currentTab==='valuation')renderValuationTab();
 }
 function renderRangeBtns(active){
   const rs=[['3m','3个月'],['6m','6个月'],['1y','1年'],['all','全部']];
@@ -490,6 +501,47 @@ function renderInfoTab(){
   document.getElementById('chartArea').innerHTML=
     '<div class="alert-info" style="margin-bottom:16px"><span>&#128161;</span>费率进度条越长=费率越高。溢价徽章：红=溢价，绿=折价。</div>'+
     '<div class="info-grid">'+cards+'</div>';
+}
+
+function renderValuationTab(){
+  if(typeof NDX_VALUATION==='undefined'||!NDX_VALUATION.series||!NDX_VALUATION.series.length){
+    document.getElementById('chartArea').innerHTML='<div class="alert-warn"><span>&#9888;</span>暂无 NDX 估值数据。</div>';
+    return;
+  }
+  const s=NDX_VALUATION.series;
+  const last=s[s.length-1];
+  const pePct=last.pe_pct;
+  const pegColor=pePct===null||pePct===undefined?'':pePct<30?'#22c55e':pePct<70?'#f59e0b':'#ef4444';
+  const pctBadge=pePct===null||pePct===undefined?'—':`<span style="color:${pegColor};font-weight:700">${pePct}%</span>`;
+  const cell=(label,val,sub)=>`<div class="metric"><span class="metric-label">${label}</span><span class="metric-value">${val}${sub?`<span style="color:#8892a4;font-size:11px;margin-left:4px">${sub}</span>`:''}</span></div>`;
+  let html='';
+  html+='<div class="alert-info" style="margin-bottom:16px"><span>&#128161;</span>数据来源：蛋卷基金 NDX 估值页（PE_TTM / 历史百分位 / PB / ROE / 股息率 / 预测PEG）。仅供参考，非投资建议。</div>';
+  html+='<div class="info-grid"><div class="info-card" style="border-color:#4f7bff55">';
+  html+=`<div class="card-header"><div><div class="card-name" style="color:#4f7bff">纳斯达克100 (NDX) 估值</div><div class="card-code">更新于 ${last.date} &#183; 蛋卷综合：${last.label||'—'}</div></div></div>`;
+  html+=cell('市盈率 PE(TTM)', last.pe==null?'—':last.pe, '');
+  html+=cell('PE 历史百分位', pctBadge, '（越低越便宜）');
+  html+=cell('市净率 PB', last.pb==null?'—':last.pb, '');
+  html+=cell('PB 历史百分位', last.pb_pct==null?'—':last.pb_pct+'%', '');
+  html+=cell('ROE', last.roe==null?'—':last.roe+'%', '');
+  html+=cell('股息率', last.dividend_yield==null?'—':last.dividend_yield+'%', '');
+  html+=cell('预测 PEG', last.peg==null?'—':last.peg, '');
+  html+=cell('综合位置', last.position_pct==null?'—':`比过去 ${last.position_pct}% 的时间低`, '');
+  html+='</div>';
+  html+='<div class="info-card" style="border-color:#84cc1655"><div class="card-header"><div><div class="card-name" style="color:#84cc16">PE 分位数参考</div><div class="card-code">30 / 中位 / 70 分位 PE</div></div></div>';
+  html+=cell('30 分位', last.pe_30==null?'—':last.pe_30, '');
+  html+=cell('中位值', last.pe_mid==null?'—':last.pe_mid, '');
+  html+=cell('70 分位', last.pe_70==null?'—':last.pe_70, '');
+  html+='</div></div>';
+  if(s.length>=2){
+    const labels=s.map(d=>d.date);
+    const peData=s.map(d=>d.pe);
+    html+='<div class="chart-card"><h3>PE(TTM) 历史走势</h3><div class="chart-desc">每日自动更新后积累</div><div class="chart-wrapper"><canvas id="chartValPe"></canvas></div></div>';
+    document.getElementById('chartArea').innerHTML=html;
+    makeLineChart('chartValPe',labels,[{label:'PE(TTM)',data:peData,borderColor:'#4f7bff',backgroundColor:'#4f7bff12',borderWidth:1.8,pointRadius:0,tension:0.3}],v=>v!=null?v.toFixed(2):'-');
+  }else{
+    html+='<div class="alert-info" style="margin-top:16px"><span>&#128161;</span>当前仅 1 个数据点，PE 历史趋势图将在每日自动更新积累更多数据后显示。</div>';
+    document.getElementById('chartArea').innerHTML=html;
+  }
 }
 
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{

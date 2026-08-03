@@ -21,6 +21,8 @@ DAILY_PRICE_DAYS = 30
 DAILY_NAV_DAYS = 40
 MAX_ABS_PREMIUM = 50.0
 REQUEST_RETRIES = 3
+NDX_VALUATION_FILE = 'ndx_valuation.json'
+NDX_VALUATION_API = 'https://danjuanfunds.com/djapi/index/valuation/NDX'
 
 
 def load_codes(json_file):
@@ -436,6 +438,105 @@ def write_update(result, prefix):
         print(f'  [JS] Updated {js_path}')
 
 
+def fetch_ndx_valuation():
+    """Fetch NDX index valuation from Danjuan (Xueqiu) valuation API.
+
+    The endpoint requires a logged-in session, supplied via the
+    DANJUAN_COOKIE environment variable. Returns a dict of valuation
+    metrics or None when unavailable. Field names are mapped defensively
+    because Danjuan/Xueqiu may rename them.
+    """
+    cookie = os.environ.get('DANJUAN_COOKIE')
+    if not cookie:
+        print('  [NDX valuation] DANJUAN_COOKIE not set; keeping last value (no auto-update).')
+        return None
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://danjuanfunds.com/dj-valuation-table-detail/NDX',
+        'Cookie': cookie,
+        'Accept': 'application/json',
+    }
+    req = urllib.request.Request(NDX_VALUATION_API, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+    except Exception as exc:
+        print(f'  [NDX valuation] request failed: {exc}')
+        return None
+    if data.get('result_code') not in (0, None) or 'data' not in data:
+        print(f"  [NDX valuation] API rejected: {data.get('message')} "
+              f"(result_code={data.get('result_code')})")
+        return None
+    d = data['data']
+
+    def pick(*keys):
+        for k in keys:
+            if k in d and d[k] not in (None, ''):
+                return d[k]
+        return None
+
+    rec = {
+        'pe': pick('pe', 'pe_ttm', 'pe_lyr'),
+        'pe_pct': pick('pe_percentile', 'pe_pct', 'pe_percent'),
+        'pb': pick('pb', 'pb_ttm'),
+        'pb_pct': pick('pb_percentile', 'pb_pct', 'pb_percent'),
+        'roe': pick('roe'),
+        'dividend_yield': pick('dividend_yield', 'dy', 'dividend', 'yield'),
+        'peg': pick('peg', 'forecast_peg', 'peg_ttm'),
+        'pe_30': pick('pe_30', 'pe_30_point', 'p30'),
+        'pe_mid': pick('pe_mid', 'pe_median', 'median'),
+        'pe_70': pick('pe_70', 'pe_70_point', 'p70'),
+        'position_pct': pick('current_year_percentile', 'position_pct', 'percentile'),
+        'label': pick('color', 'label', 'valuation', 'assessment'),
+    }
+    # 打印原始键名，便于后续根据实际返回校准字段映射
+    print('  [NDX valuation] raw keys:', list(d.keys()))
+    rec = {k: v for k, v in rec.items() if v is not None}
+    if 'pe' not in rec:
+        print('  [NDX valuation] no PE found in response; keeping last value.')
+        return None
+    return rec
+
+
+def update_ndx_valuation():
+    """Load ndx_valuation.json, refresh with the latest valuation, and emit
+    data/ndx_valuation.js for the frontend. Falls back to the previous value
+    (no error, no abort) when the fetch is unavailable.
+    """
+    json_path = os.path.join(DIR, NDX_VALUATION_FILE)
+    today = datetime.now().strftime('%Y-%m-%d')
+
+    if os.path.exists(json_path):
+        with open(json_path, 'r', encoding='utf-8') as f:
+            store = json.load(f)
+    else:
+        store = {
+            'source': '蛋卷基金 NDX 估值 (https://danjuanfunds.com/dj-valuation-table-detail/NDX)',
+            'updated': '',
+            'series': [],
+        }
+    series = store.setdefault('series', [])
+
+    rec = fetch_ndx_valuation()
+    if rec is None:
+        store['updated'] = series[-1]['date'] if series else ''
+        print('  [NDX valuation] no update (kept existing data).')
+    else:
+        rec['date'] = today
+        if series and series[-1]['date'] == today:
+            series[-1] = rec
+        else:
+            series.append(rec)
+        store['updated'] = today
+        print(f'  [NDX valuation] updated {today}: PE={rec.get("pe")} '
+              f'PE%={rec.get("pe_pct")}')
+
+    write_text_atomic(json_path, json.dumps(store, ensure_ascii=False, indent=2))
+    js_path = os.path.join(DATA_DIR, 'ndx_valuation.js')
+    content = f'const NDX_VALUATION = {json.dumps(store, ensure_ascii=False)};\n'
+    write_text_atomic(js_path, content)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Update ETF price and NAV data')
     parser.add_argument(
@@ -459,6 +560,13 @@ def main(argv=None):
 
     for result, prefix in results:
         write_update(result, prefix)
+
+    # NDX 估值参考（蛋卷）：独立更新，失败不影响 ETF 主流程
+    try:
+        update_ndx_valuation()
+    except Exception as exc:
+        print(f'\n[Warning] NDX valuation update skipped: {exc}')
+
     print('\nGlobal update complete!')
     return 0
 
