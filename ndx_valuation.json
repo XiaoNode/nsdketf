@@ -1,0 +1,21 @@
+{
+  "source": "蛋卷基金 NDX 估值 (https://danjuanfunds.com/dj-valuation-table-detail/NDX)，需登录 cookie 才能每日自动更新；未配置 DANJUAN_COOKIE 时保留该种子值",
+  "updated": "2026-07-31",
+  "series": [
+    {
+      "date": "2026-07-31",
+      "pe": 29.98,
+      "pe_pct": 46.28,
+      "pb": 9.17,
+      "pb_pct": 79.36,
+      "roe": 30.6,
+      "dividend_yield": 0.44,
+      "peg": 1.49,
+      "pe_30": 34.19,
+      "pe_mid": 35.15,
+      "pe_70": 36.13,
+      "position_pct": 53.72,
+      "label": "估值偏高"
+    }
+  ]
+}
