@@ -517,11 +517,12 @@ function renderValuationTab(){
   const pctBadge=pePct===null||pePct===undefined?'—':`<span style="color:${pegColor};font-weight:700">${pePct}%</span>`;
   const cell=(label,val,sub)=>`<div class="metric"><span class="metric-label">${label}</span><span class="metric-value">${val}${sub?`<span style="color:#8892a4;font-size:11px;margin-left:4px">${sub}</span>`:''}</span></div>`;
   let html='';
-  html+='<div class="alert-info" style="margin-bottom:16px"><span>&#128161;</span>数据来源：蛋卷基金 NDX 估值页（PE_TTM / 历史百分位 / PB / ROE / 股息率 / 预测PEG）。仅供参考，非投资建议。</div>';
+  html+=`<div class="alert-info" style="margin-bottom:16px"><span>&#128161;</span>数据来源：${NDX_VALUATION.source || '蛋卷基金 NDX 估值页'}。仅供参考，非投资建议。</div>`;
   html+='<div class="info-grid"><div class="info-card" style="border-color:#4f7bff55">';
-  html+=`<div class="card-header"><div><div class="card-name" style="color:#4f7bff">纳斯达克100 (NDX) 估值</div><div class="card-code">更新于 ${last.date} &#183; 蛋卷综合：${last.label||'—'}</div></div></div>`;
+  html+=`<div class="card-header"><div><div class="card-name" style="color:#4f7bff">纳斯达克100 (NDX) 估值</div><div class="card-code">更新于 ${last.date} ${last.label?'&#183; 蛋卷综合：'+last.label:''}</div></div></div>`;
   html+=cell('市盈率 PE(TTM)', last.pe==null?'—':last.pe, '');
-  html+=cell('PE 历史百分位', pctBadge, '（越低越便宜）');
+  html+=cell('PE 历史百分位', pctBadge, '（越低越便宜；基于 HOM 历史序列）');
+  if(last.forward_pe!=null) html+=cell('Forward PE (12m)', last.forward_pe, '一致预期口径');
   html+=cell('市净率 PB', last.pb==null?'—':last.pb, '');
   html+=cell('PB 历史百分位', last.pb_pct==null?'—':last.pb_pct+'%', '');
   html+=cell('ROE', last.roe==null?'—':last.roe+'%', '');

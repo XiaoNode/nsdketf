@@ -22,7 +22,10 @@ DAILY_NAV_DAYS = 40
 MAX_ABS_PREMIUM = 50.0
 REQUEST_RETRIES = 3
 NDX_VALUATION_FILE = 'ndx_valuation.json'
+# 蛋卷估值接口（PB / ROE / 股息率 / PEG / 综合百分位，需登录 cookie）
 NDX_VALUATION_API = 'https://danjuanfunds.com/djapi/index/valuation/NDX'
+# History of Market 公开 JSON（TTM PE / Forward PE，每日更新，免登录）
+NDX_HOM_API = 'https://historyofmarket.com/api/ndx/forward-pe.json'
 
 
 def load_codes(json_file):
@@ -438,7 +441,63 @@ def write_update(result, prefix):
         print(f'  [JS] Updated {js_path}')
 
 
-def fetch_ndx_valuation():
+def _percentile_rank(value, series):
+    """Return the percentile rank of ``value`` within ``series`` (0-100)."""
+    if not series:
+        return None
+    clean = [float(x) for x in series if x is not None]
+    if not clean:
+        return None
+    below = sum(1 for x in clean if x < value)
+    equal = sum(1 for x in clean if x == value)
+    return round((below + equal / 2) / len(clean) * 100, 2)
+
+
+def fetch_hom_ndx_valuation():
+    """Fetch NDX TTM / Forward PE from History of Market public JSON API.
+
+    Returns a dict with at least ``pe`` (TTM PE) and ``forward_pe``
+    (daily forward PE), or None on failure.  The API is public, requires
+    no login and updates daily.
+    """
+    req = urllib.request.Request(
+        NDX_HOM_API,
+        headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode('utf-8'))
+    except Exception as exc:
+        print(f'  [NDX valuation] HOM request failed: {exc}')
+        return None
+
+    current = payload.get('current') or {}
+    pe = current.get('trailing')
+    forward_pe = current.get('forwardOwn') or current.get('forward')
+    if pe is None:
+        print('  [NDX valuation] HOM response has no trailing PE.')
+        return None
+
+    # Compute a percentile rank from the available daily trailing history.
+    trailing_history = payload.get('trailing', [])
+    pe_series = [row.get('value') for row in trailing_history if row.get('value') is not None]
+    pe_pct = _percentile_rank(float(pe), pe_series)
+
+    rec = {
+        'pe': float(pe),
+        'forward_pe': float(forward_pe) if forward_pe is not None else None,
+        'pe_pct': pe_pct,
+        'pe_history_date': payload.get('updated'),
+        'coverage_trailing': current.get('trailingCoverage'),
+        'coverage_forward': current.get('forwardCoverage'),
+    }
+    return {k: v for k, v in rec.items() if v is not None}
+
+
+def fetch_danjuan_ndx_valuation():
     """Fetch NDX index valuation from Danjuan (Xueqiu) valuation API.
 
     The endpoint requires a logged-in session, supplied via the
@@ -448,7 +507,6 @@ def fetch_ndx_valuation():
     """
     cookie = os.environ.get('DANJUAN_COOKIE')
     if not cookie:
-        print('  [NDX valuation] DANJUAN_COOKIE not set; keeping last value (no auto-update).')
         return None
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -461,10 +519,10 @@ def fetch_ndx_valuation():
         with urllib.request.urlopen(req, timeout=20) as resp:
             data = json.loads(resp.read().decode('utf-8'))
     except Exception as exc:
-        print(f'  [NDX valuation] request failed: {exc}')
+        print(f'  [NDX valuation] Danjuan request failed: {exc}')
         return None
     if data.get('result_code') not in (0, None) or 'data' not in data:
-        print(f"  [NDX valuation] API rejected: {data.get('message')} "
+        print(f"  [NDX valuation] Danjuan API rejected: {data.get('message')} "
               f"(result_code={data.get('result_code')})")
         return None
     d = data['data']
@@ -489,11 +547,37 @@ def fetch_ndx_valuation():
         'position_pct': pick('current_year_percentile', 'position_pct', 'percentile'),
         'label': pick('color', 'label', 'valuation', 'assessment'),
     }
-    # 打印原始键名，便于后续根据实际返回校准字段映射
-    print('  [NDX valuation] raw keys:', list(d.keys()))
-    rec = {k: v for k, v in rec.items() if v is not None}
-    if 'pe' not in rec:
-        print('  [NDX valuation] no PE found in response; keeping last value.')
+    print('  [NDX valuation] Danjuan raw keys:', list(d.keys()))
+    return {k: v for k, v in rec.items() if v is not None}
+
+
+def fetch_ndx_valuation():
+    """Fetch NDX valuation from multiple sources.
+
+    Priority:
+    1. History of Market (public, daily TTM/Forward PE)
+    2. Danjuan/Xueqiu (login-required PB/ROE/dividend/PEG/percentiles)
+
+    Returns a merged dict or None when no source is available.
+    """
+    rec = fetch_hom_ndx_valuation()
+    if rec:
+        print(f'  [NDX valuation] HOM: PE={rec.get("pe")} forward={rec.get("forward_pe")}')
+
+    danjuan = fetch_danjuan_ndx_valuation()
+    if danjuan:
+        print(f'  [NDX valuation] Danjuan: PE={danjuan.get("pe")} label={danjuan.get("label")}')
+        # Danjuan's PB/ROE/dividend/PEG/quantiles are authoritative when available.
+        for key in ('pb', 'pb_pct', 'roe', 'dividend_yield', 'peg',
+                    'pe_30', 'pe_mid', 'pe_70', 'position_pct', 'label'):
+            if key in danjuan:
+                rec[key] = danjuan[key]
+        # Only overwrite HOM percentile if Danjuan provided one.
+        if 'pe_pct' in danjuan:
+            rec['pe_pct'] = danjuan['pe_pct']
+
+    if not rec:
+        print('  [NDX valuation] all sources unavailable; keeping last value.')
         return None
     return rec
 
@@ -510,11 +594,8 @@ def update_ndx_valuation():
         with open(json_path, 'r', encoding='utf-8') as f:
             store = json.load(f)
     else:
-        store = {
-            'source': '蛋卷基金 NDX 估值 (https://danjuanfunds.com/dj-valuation-table-detail/NDX)',
-            'updated': '',
-            'series': [],
-        }
+        store = {}
+    store['source'] = 'History of Market NDX 估值 (每日 TTM/Forward PE，免登录) + 蛋卷基金 (PB/ROE/股息率/PEG，需登录 cookie)'
     series = store.setdefault('series', [])
 
     rec = fetch_ndx_valuation()
