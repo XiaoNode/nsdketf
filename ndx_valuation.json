@@ -18,12 +18,12 @@
       "label": "估值偏高"
     },
     {
-      "pe": 28.88,
-      "forward_pe": 22.25,
-      "pe_pct": 11.02,
-      "pe_history_date": "2026-08-07",
-      "coverage_trailing": 97.17,
-      "coverage_forward": 99.78,
+      "pe": 29.12,
+      "forward_pe": 22.29,
+      "pe_pct": 14.17,
+      "pe_history_date": "2026-08-08",
+      "coverage_trailing": 97.1,
+      "coverage_forward": 99.85,
       "date": "2026-08-08"
     }
   ]
