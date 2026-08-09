@@ -1,6 +1,6 @@
 {
   "source": "History of Market NDX 估值 (每日 TTM/Forward PE，免登录) + 蛋卷基金 (PB/ROE/股息率/PEG，需登录 cookie)",
-  "updated": "2026-08-08",
+  "updated": "2026-08-09",
   "series": [
     {
       "date": "2026-07-31",
@@ -25,6 +25,15 @@
       "coverage_trailing": 97.1,
       "coverage_forward": 99.85,
       "date": "2026-08-08"
+    },
+    {
+      "pe": 28.59,
+      "forward_pe": 22.29,
+      "pe_pct": 9.17,
+      "pe_history_date": "2026-08-08",
+      "coverage_trailing": 102.69,
+      "coverage_forward": 105.51,
+      "date": "2026-08-09"
     }
   ]
 }
