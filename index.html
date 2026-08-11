@@ -513,7 +513,6 @@ function renderValuationTab(){
   const s=NDX_VALUATION.series;
   const last=s[s.length-1];
   const today=new Date().toISOString().slice(0,10);
-  const isStale=last.date!==today;
 
   const badge=(pct)=>{
     if(pct===null||pct===undefined) return '—';
@@ -522,17 +521,24 @@ function renderValuationTab(){
   };
   const cell=(label,val,sub)=>`<div class="metric"><span class="metric-label">${label}</span><span class="metric-value">${val}${sub?`<span style="color:#8892a4;font-size:11px;margin-left:4px">${sub}</span>`:''}</span></div>`;
 
+  const peDate = last.pe_history_date || last.date;
+  const fwdDate = last.forward_history_date || last.date;
+  const checked = last.checked || NDX_VALUATION.updated || '';
+  const staleReasons=[];
+  if(peDate!==today) staleReasons.push(`TTM PE 最新数据为 ${peDate}`);
+  if(fwdDate!==today) staleReasons.push(`Forward PE 最新数据为 ${fwdDate}`);
+
   let html='';
-  html+=`<div class="alert-info" style="margin-bottom:16px"><span>&#128161;</span>${NDX_VALUATION.source || 'NDX 估值参考'}。不同数据商对亏损股处理、EPS 时点、加权方式的差异会导致 TTM PE 数值略有不同；蛋卷 31.31 与 HOM 28.59 并非错误，而是口径不同。仅供参考，非投资建议。</div>`;
-  if(isStale){
-    html+=`<div class="alert-warn" style="margin-bottom:16px"><span>&#9888;</span>当前估值数据日期为 <b>${last.date}</b>，非今日 ${today}。可能因数据源未更新或自动任务尚未执行。</div>`;
+  html+=`<div class="alert-info" style="margin-bottom:16px"><span>&#128161;</span>${NDX_VALUATION.source || 'NDX 估值参考'}。不同数据商对亏损股处理、EPS 时点、加权方式的差异会导致 TTM PE 数值略有不同；蛋卷 31.31 与 HOM 28.49 并非错误，而是口径不同。仅供参考，非投资建议。</div>`;
+  if(staleReasons.length){
+    html+=`<div class="alert-warn" style="margin-bottom:16px"><span>&#9888;</span>${staleReasons.join('；')}。面板于 ${checked || today} 刷新，数据源尚未发布新数据或发布频率较低（Forward PE 通常为周更）。</div>`;
   }
 
   html+='<div class="info-grid"><div class="info-card" style="border-color:#4f7bff55">';
-  html+=`<div class="card-header"><div><div class="card-name" style="color:#4f7bff">纳斯达克100 (NDX) 估值</div><div class="card-code">数据日期 ${last.date} ${last.label?'&#183; 蛋卷综合：'+last.label:''}</div></div></div>`;
-  html+=cell('TTM PE', last.pe==null?'—':last.pe, last.pe_history_date?`(${last.pe_history_date})`:'');
+  html+=`<div class="card-header"><div><div class="card-name" style="color:#4f7bff">纳斯达克100 (NDX) 估值</div><div class="card-code">刷新于 ${checked || today} ${last.label?'&#183; 蛋卷综合：'+last.label:''}</div></div></div>`;
+  html+=cell('TTM PE', last.pe==null?'—':last.pe, `数据日期 ${peDate}`);
   html+=cell('PE 历史百分位', badge(last.pe_pct), last.pe_pct!=null?'越低越便宜':'');
-  html+=cell('Forward PE (12m)', last.forward_pe==null?'—':last.forward_pe, last.forward_history_date?`(${last.forward_history_date})`:'');
+  html+=cell('Forward PE (12m)', last.forward_pe==null?'—':last.forward_pe, `数据日期 ${fwdDate}`);
   html+=cell('Forward PE 百分位', badge(last.forward_pe_pct), last.forward_pe_pct!=null?'基于 2001 年至今 forward PE 序列':'');
   html+=cell('市净率 PB', last.pb==null?'—':last.pb, '');
   html+=cell('PB 历史百分位', last.pb_pct==null?'—':last.pb_pct+'%', '');

@@ -488,9 +488,24 @@ def fetch_hom_ndx_valuation():
         print('  [NDX valuation] HOM response has no trailing PE.')
         return None
 
+    # Determine the *actual* observation date for each metric from the
+    # corresponding historical series.  ``payload['updated']`` is only the
+    # API/cache refresh date and may be ahead of the latest data point.
+    trailing_history = payload.get('trailing', [])
+    forward_history = payload.get('forward', [])
+
+    def _last_date(rows):
+        for row in reversed(rows):
+            d = row.get('date')
+            if d:
+                return d
+        return payload.get('updated')
+
+    pe_history_date = _last_date(trailing_history)
+    forward_history_date = _last_date(forward_history)
+
     # Long-history forward PE series (weekly since 2001) is the only
     # series long enough for a meaningful percentile rank.
-    forward_history = payload.get('forward', [])
     forward_series = [row.get('value') for row in forward_history if row.get('value') is not None]
     forward_pe_pct = _percentile_rank(float(forward_pe), forward_series) if forward_pe is not None else None
 
@@ -498,8 +513,8 @@ def fetch_hom_ndx_valuation():
         'pe': float(pe),
         'forward_pe': float(forward_pe) if forward_pe is not None else None,
         'forward_pe_pct': forward_pe_pct,
-        'pe_history_date': payload.get('updated'),
-        'forward_history_date': payload.get('updated'),
+        'pe_history_date': pe_history_date,
+        'forward_history_date': forward_history_date,
         'coverage_trailing': current.get('trailingCoverage'),
         'coverage_forward': current.get('forwardCoverage'),
     }
@@ -619,17 +634,46 @@ def update_ndx_valuation():
 
     rec = fetch_ndx_valuation()
     if rec is None:
-        store['updated'] = series[-1]['date'] if series else ''
+        store['updated'] = series[-1].get('checked') or series[-1].get('date') if series else ''
         print('  [NDX valuation] no update (kept existing data).')
     else:
-        rec['date'] = today
-        if series and series[-1]['date'] == today:
-            series[-1] = rec
+        # Use the actual data-source date as the record date, not the script-run
+        # date, so the UI never shows "data date = today" while the metric still
+        # carries last week’s value.
+        rec['date'] = rec.get('pe_history_date') or today
+        rec['checked'] = today
+
+        # Avoid stacking identical records when the upstream source has not yet
+        # published a new observation (e.g. forward PE is weekly).
+        if series:
+            last = series[-1]
+            same = (
+                last.get('pe_history_date') == rec.get('pe_history_date') and
+                last.get('forward_history_date') == rec.get('forward_history_date') and
+                last.get('pe') == rec.get('pe') and
+                last.get('forward_pe') == rec.get('forward_pe')
+            )
+            if same:
+                # Keep the existing data point but record that we checked today.
+                last['checked'] = today
+                store['updated'] = today
+                print(f'  [NDX valuation] source unchanged ({rec.get("pe_history_date")}); '
+                      f'kept existing record, checked {today}.')
+            elif last.get('date') == rec.get('date'):
+                series[-1] = rec
+                store['updated'] = today
+                print(f'  [NDX valuation] refreshed {rec.get("date")}: PE={rec.get("pe")} '
+                      f'forward={rec.get("forward_pe")} forward_pct={rec.get("forward_pe_pct")}')
+            else:
+                series.append(rec)
+                store['updated'] = today
+                print(f'  [NDX valuation] appended {rec.get("date")}: PE={rec.get("pe")} '
+                      f'forward={rec.get("forward_pe")} forward_pct={rec.get("forward_pe_pct")}')
         else:
             series.append(rec)
-        store['updated'] = today
-        print(f'  [NDX valuation] updated {today}: PE={rec.get("pe")} '
-              f'forward={rec.get("forward_pe")} forward_pct={rec.get("forward_pe_pct")}')
+            store['updated'] = today
+            print(f'  [NDX valuation] initialized {rec.get("date")}: PE={rec.get("pe")} '
+                  f'forward={rec.get("forward_pe")} forward_pct={rec.get("forward_pe_pct")}')
 
     write_text_atomic(json_path, json.dumps(store, ensure_ascii=False, indent=2))
     js_path = os.path.join(DATA_DIR, 'ndx_valuation.js')

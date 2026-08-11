@@ -31,14 +31,6 @@
       "pe_history_date": "2026-08-08",
       "coverage_trailing": 102.69,
       "coverage_forward": 105.51,
-      "date": "2026-08-09"
-    },
-    {
-      "pe": 28.59,
-      "forward_pe": 22.29,
-      "pe_history_date": "2026-08-08",
-      "coverage_trailing": 102.69,
-      "coverage_forward": 105.51,
       "date": "2026-08-10"
     },
     {
@@ -46,10 +38,11 @@
       "forward_pe": 22.25,
       "forward_pe_pct": 57.91,
       "pe_history_date": "2026-08-11",
-      "forward_history_date": "2026-08-11",
+      "forward_history_date": "2026-08-05",
       "coverage_trailing": 102.68,
       "coverage_forward": 105.42,
-      "date": "2026-08-11"
+      "date": "2026-08-11",
+      "checked": "2026-08-11"
     }
   ]
 }
