@@ -42,13 +42,13 @@
       "date": "2026-08-10"
     },
     {
-      "pe": 28.59,
-      "forward_pe": 22.29,
-      "forward_pe_pct": 58.15,
-      "pe_history_date": "2026-08-08",
-      "forward_history_date": "2026-08-08",
-      "coverage_trailing": 102.69,
-      "coverage_forward": 105.51,
+      "pe": 28.49,
+      "forward_pe": 22.25,
+      "forward_pe_pct": 57.91,
+      "pe_history_date": "2026-08-11",
+      "forward_history_date": "2026-08-11",
+      "coverage_trailing": 102.68,
+      "coverage_forward": 105.42,
       "date": "2026-08-11"
     }
   ]
