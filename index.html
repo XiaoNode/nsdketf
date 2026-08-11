@@ -512,17 +512,28 @@ function renderValuationTab(){
   }
   const s=NDX_VALUATION.series;
   const last=s[s.length-1];
-  const pePct=last.pe_pct;
-  const pegColor=pePct===null||pePct===undefined?'':pePct<30?'#22c55e':pePct<70?'#f59e0b':'#ef4444';
-  const pctBadge=pePct===null||pePct===undefined?'—':`<span style="color:${pegColor};font-weight:700">${pePct}%</span>`;
+  const today=new Date().toISOString().slice(0,10);
+  const isStale=last.date!==today;
+
+  const badge=(pct)=>{
+    if(pct===null||pct===undefined) return '—';
+    const color=pct<30?'#22c55e':pct<70?'#f59e0b':'#ef4444';
+    return `<span style="color:${color};font-weight:700">${pct}%</span>`;
+  };
   const cell=(label,val,sub)=>`<div class="metric"><span class="metric-label">${label}</span><span class="metric-value">${val}${sub?`<span style="color:#8892a4;font-size:11px;margin-left:4px">${sub}</span>`:''}</span></div>`;
+
   let html='';
-  html+=`<div class="alert-info" style="margin-bottom:16px"><span>&#128161;</span>数据来源：${NDX_VALUATION.source || '蛋卷基金 NDX 估值页'}。仅供参考，非投资建议。</div>`;
+  html+=`<div class="alert-info" style="margin-bottom:16px"><span>&#128161;</span>${NDX_VALUATION.source || 'NDX 估值参考'}。不同数据商对亏损股处理、EPS 时点、加权方式的差异会导致 TTM PE 数值略有不同；蛋卷 31.31 与 HOM 28.59 并非错误，而是口径不同。仅供参考，非投资建议。</div>`;
+  if(isStale){
+    html+=`<div class="alert-warn" style="margin-bottom:16px"><span>&#9888;</span>当前估值数据日期为 <b>${last.date}</b>，非今日 ${today}。可能因数据源未更新或自动任务尚未执行。</div>`;
+  }
+
   html+='<div class="info-grid"><div class="info-card" style="border-color:#4f7bff55">';
-  html+=`<div class="card-header"><div><div class="card-name" style="color:#4f7bff">纳斯达克100 (NDX) 估值</div><div class="card-code">更新于 ${last.date} ${last.label?'&#183; 蛋卷综合：'+last.label:''}</div></div></div>`;
-  html+=cell('市盈率 PE(TTM)', last.pe==null?'—':last.pe, '');
-  html+=cell('PE 历史百分位', pctBadge, '（越低越便宜；基于 HOM 历史序列）');
-  if(last.forward_pe!=null) html+=cell('Forward PE (12m)', last.forward_pe, '一致预期口径');
+  html+=`<div class="card-header"><div><div class="card-name" style="color:#4f7bff">纳斯达克100 (NDX) 估值</div><div class="card-code">数据日期 ${last.date} ${last.label?'&#183; 蛋卷综合：'+last.label:''}</div></div></div>`;
+  html+=cell('TTM PE', last.pe==null?'—':last.pe, last.pe_history_date?`(${last.pe_history_date})`:'');
+  html+=cell('PE 历史百分位', badge(last.pe_pct), last.pe_pct!=null?'越低越便宜':'');
+  html+=cell('Forward PE (12m)', last.forward_pe==null?'—':last.forward_pe, last.forward_history_date?`(${last.forward_history_date})`:'');
+  html+=cell('Forward PE 百分位', badge(last.forward_pe_pct), last.forward_pe_pct!=null?'基于 2001 年至今 forward PE 序列':'');
   html+=cell('市净率 PB', last.pb==null?'—':last.pb, '');
   html+=cell('PB 历史百分位', last.pb_pct==null?'—':last.pb_pct+'%', '');
   html+=cell('ROE', last.roe==null?'—':last.roe+'%', '');
@@ -535,12 +546,18 @@ function renderValuationTab(){
   html+=cell('中位值', last.pe_mid==null?'—':last.pe_mid, '');
   html+=cell('70 分位', last.pe_70==null?'—':last.pe_70, '');
   html+='</div></div>';
+
   if(s.length>=2){
     const labels=s.map(d=>d.date);
     const peData=s.map(d=>d.pe);
-    html+='<div class="chart-card"><h3>PE(TTM) 历史走势</h3><div class="chart-desc">每日自动更新后积累</div><div class="chart-wrapper"><canvas id="chartValPe"></canvas></div></div>';
+    const fwdData=s.map(d=>d.forward_pe);
+    const datasets=[{label:'TTM PE',data:peData,borderColor:'#4f7bff',backgroundColor:'#4f7bff12',borderWidth:1.8,pointRadius:0,tension:0.3}];
+    if(fwdData.some(v=>v!=null)){
+      datasets.push({label:'Forward PE',data:fwdData,borderColor:'#22c55e',backgroundColor:'#22c55e12',borderWidth:1.8,pointRadius:0,tension:0.3});
+    }
+    html+='<div class="chart-card"><h3>PE 历史走势</h3><div class="chart-desc">自动更新后积累；蓝线=TTM PE，绿线=Forward PE</div><div class="chart-wrapper"><canvas id="chartValPe"></canvas></div></div>';
     document.getElementById('chartArea').innerHTML=html;
-    makeLineChart('chartValPe',labels,[{label:'PE(TTM)',data:peData,borderColor:'#4f7bff',backgroundColor:'#4f7bff12',borderWidth:1.8,pointRadius:0,tension:0.3}],v=>v!=null?v.toFixed(2):'-');
+    makeLineChart('chartValPe',labels,datasets,v=>v!=null?v.toFixed(2):'-');
   }else{
     html+='<div class="alert-info" style="margin-top:16px"><span>&#128161;</span>当前仅 1 个数据点，PE 历史趋势图将在每日自动更新积累更多数据后显示。</div>';
     document.getElementById('chartArea').innerHTML=html;

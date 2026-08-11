@@ -456,9 +456,14 @@ def _percentile_rank(value, series):
 def fetch_hom_ndx_valuation():
     """Fetch NDX TTM / Forward PE from History of Market public JSON API.
 
-    Returns a dict with at least ``pe`` (TTM PE) and ``forward_pe``
-    (daily forward PE), or None on failure.  The API is public, requires
-    no login and updates daily.
+    Returns a dict with ``pe`` (TTM/trailing PE), ``forward_pe``
+    (12-month blended forward PE), and a long-history forward percentile,
+    or None on failure.  The API is public, requires no login and updates
+    daily.
+
+    Important: HOM's ``trailing`` series only starts in 2026-05, so it
+    cannot be used for a meaningful historical percentile.  The ``forward``
+    series goes back to 2001 and is used for the percentile instead.
     """
     req = urllib.request.Request(
         NDX_HOM_API,
@@ -476,21 +481,25 @@ def fetch_hom_ndx_valuation():
 
     current = payload.get('current') or {}
     pe = current.get('trailing')
+    # Prefer the daily blended-forward series computed from published ETF
+    # holdings; fall back to the weekly terminal forward series.
     forward_pe = current.get('forwardOwn') or current.get('forward')
     if pe is None:
         print('  [NDX valuation] HOM response has no trailing PE.')
         return None
 
-    # Compute a percentile rank from the available daily trailing history.
-    trailing_history = payload.get('trailing', [])
-    pe_series = [row.get('value') for row in trailing_history if row.get('value') is not None]
-    pe_pct = _percentile_rank(float(pe), pe_series)
+    # Long-history forward PE series (weekly since 2001) is the only
+    # series long enough for a meaningful percentile rank.
+    forward_history = payload.get('forward', [])
+    forward_series = [row.get('value') for row in forward_history if row.get('value') is not None]
+    forward_pe_pct = _percentile_rank(float(forward_pe), forward_series) if forward_pe is not None else None
 
     rec = {
         'pe': float(pe),
         'forward_pe': float(forward_pe) if forward_pe is not None else None,
-        'pe_pct': pe_pct,
+        'forward_pe_pct': forward_pe_pct,
         'pe_history_date': payload.get('updated'),
+        'forward_history_date': payload.get('updated'),
         'coverage_trailing': current.get('trailingCoverage'),
         'coverage_forward': current.get('forwardCoverage'),
     }
@@ -554,9 +563,9 @@ def fetch_danjuan_ndx_valuation():
 def fetch_ndx_valuation():
     """Fetch NDX valuation from multiple sources.
 
-    Priority:
-    1. History of Market (public, daily TTM/Forward PE)
-    2. Danjuan/Xueqiu (login-required PB/ROE/dividend/PEG/percentiles)
+    Sources:
+    - History of Market (public, daily TTM/Forward PE, long forward history)
+    - Danjuan/Xueqiu (login-required TTM PE/PB/ROE/dividend/PEG/percentiles)
 
     Returns a merged dict or None when no source is available.
     """
@@ -567,14 +576,20 @@ def fetch_ndx_valuation():
     danjuan = fetch_danjuan_ndx_valuation()
     if danjuan:
         print(f'  [NDX valuation] Danjuan: PE={danjuan.get("pe")} label={danjuan.get("label")}')
-        # Danjuan's PB/ROE/dividend/PEG/quantiles are authoritative when available.
+        # Danjuan's TTM PE/PB/ROE/dividend/PEG/quantiles are authoritative
+        # when available because they match the domestic reference most users
+        # expect.  We keep them in separate keys so the UI can tell the user
+        # which source each number came from.
         for key in ('pb', 'pb_pct', 'roe', 'dividend_yield', 'peg',
                     'pe_30', 'pe_mid', 'pe_70', 'position_pct', 'label'):
             if key in danjuan:
                 rec[key] = danjuan[key]
-        # Only overwrite HOM percentile if Danjuan provided one.
+        # Danjuan's TTM PE percentile overwrites HOM's forward percentile.
         if 'pe_pct' in danjuan:
             rec['pe_pct'] = danjuan['pe_pct']
+            rec['pe_history_date'] = datetime.now().strftime('%Y-%m-%d')
+        if 'pe' in danjuan:
+            rec['pe'] = danjuan['pe']
 
     if not rec:
         print('  [NDX valuation] all sources unavailable; keeping last value.')
@@ -595,7 +610,11 @@ def update_ndx_valuation():
             store = json.load(f)
     else:
         store = {}
-    store['source'] = 'History of Market NDX 估值 (每日 TTM/Forward PE，免登录) + 蛋卷基金 (PB/ROE/股息率/PEG，需登录 cookie)'
+    store['source'] = (
+        'History of Market (https://historyofmarket.com) 每日 NDX TTM/Forward PE，免登录；'
+        '蛋卷基金 (https://danjuanfunds.com) TTM PE/PB/ROE/股息率/PEG，需登录 cookie。'
+        '不同数据商标的 TTM PE 口径可能略有差异（成分股 EPS 时点、亏损股处理、加权方式）。'
+    )
     series = store.setdefault('series', [])
 
     rec = fetch_ndx_valuation()
@@ -610,7 +629,7 @@ def update_ndx_valuation():
             series.append(rec)
         store['updated'] = today
         print(f'  [NDX valuation] updated {today}: PE={rec.get("pe")} '
-              f'PE%={rec.get("pe_pct")}')
+              f'forward={rec.get("forward_pe")} forward_pct={rec.get("forward_pe_pct")}')
 
     write_text_atomic(json_path, json.dumps(store, ensure_ascii=False, indent=2))
     js_path = os.path.join(DATA_DIR, 'ndx_valuation.js')
