@@ -1,6 +1,6 @@
 {
   "source": "History of Market (https://historyofmarket.com) 每日 NDX TTM/Forward PE，免登录；蛋卷基金 (https://danjuanfunds.com) TTM PE/PB/ROE/股息率/PEG，需登录 cookie。不同数据商标的 TTM PE 口径可能略有差异（成分股 EPS 时点、亏损股处理、加权方式）。",
-  "updated": "2026-08-19",
+  "updated": "2026-08-20",
   "series": [
     {
       "date": "2026-07-31",
@@ -109,6 +109,17 @@
       "coverage_forward": 104.77,
       "date": "2026-08-19",
       "checked": "2026-08-19"
+    },
+    {
+      "pe": 28.19,
+      "forward_pe": 21.84,
+      "forward_pe_pct": 55.89,
+      "pe_history_date": "2026-08-20",
+      "forward_history_date": "2026-08-05",
+      "coverage_trailing": 102.0,
+      "coverage_forward": 104.87,
+      "date": "2026-08-20",
+      "checked": "2026-08-20"
     }
   ]
 }
