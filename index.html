@@ -89,6 +89,7 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
   <div class="index-switch">
   <button class="index-switch-btn active" data-idx="ndx">&#127912; 纳斯达克100</button>
   <button class="index-switch-btn" data-idx="sp500">&#128200; 标普500</button>
+  <button class="index-switch-btn" data-idx="us50">&#127482;&#127480; 美国50</button>
 </div>
   <div class="update-time" id="updateTime"></div>
 </div>
@@ -213,6 +214,15 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
     <script src="data/sp500_data_2023-05.js"></script>
     <script src="data/sp500_data_2022-12.js"></script>
     <script src="data/sp500_data_2023-02.js"></script>
+<script src="data/us50_data_2025-12.js"></script>
+<script src="data/us50_data_2026-01.js"></script>
+<script src="data/us50_data_2026-02.js"></script>
+<script src="data/us50_data_2026-03.js"></script>
+<script src="data/us50_data_2026-04.js"></script>
+<script src="data/us50_data_2026-05.js"></script>
+<script src="data/us50_data_2026-06.js"></script>
+<script src="data/us50_data_2026-07.js"></script>
+<script src="data/us50_data_2026-08.js"></script>
     <script src="data/ndx_valuation.js"></script>
 <script>
 function collectMonthly(prefix, startYear, startMonth) {
@@ -257,12 +267,14 @@ function mergeMonthly(months) {
 }
 const ETF_DATA = mergeMonthly(collectMonthly('ETF', 2024, 5));
 const SP500_DATA = mergeMonthly(collectMonthly('SP500', 2024, 5));
+const US50_DATA = mergeMonthly(collectMonthly('US50', 2025, 12));
 
 let currentIndex='ndx';
-const INDEX_DATA={ndx:ETF_DATA,sp500:SP500_DATA};
-const PREMIUM_RANKING_EXCLUSIONS={ndx:new Set(['sz159509']),sp500:new Set()};
-const INDEX_NAMES={ndx:'纳斯达克100',sp500:'标普500'};
-const INDEX_SUBS={ndx:Object.keys(ETF_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率',sp500:Object.keys(SP500_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率'};
+const INDEX_DATA={ndx:ETF_DATA,sp500:SP500_DATA,us50:US50_DATA};
+const PREMIUM_RANKING_EXCLUSIONS={ndx:new Set(['sz159509']),sp500:new Set(),us50:new Set()};
+const INDEX_NAMES={ndx:'纳斯达克100',sp500:'标普500',us50:'美国50 (MSCI)'};
+const INDEX_TAGS={ndx:'NDX100',sp500:'SPX500',us50:'MSCI US50'};
+const INDEX_SUBS={ndx:Object.keys(ETF_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率',sp500:Object.keys(SP500_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率',us50:Object.keys(US50_DATA).length+'只基金 · 近5个月逐日数据 · 价格/净值/折溢价/费率'};
 let ETF_DATA_ACTIVE=ETF_DATA;
 
 function switchIndex(idx){
@@ -498,7 +510,7 @@ function renderInfoTab(){
     const borderStyle=isSel?'border-color:'+color+'55':'';
     const priceHtml=price?`<div style="font-size:15px;font-weight:700;color:#fff">&#165;${price.toFixed(3)}</div>`:'';
     const premHtml=prem!==null?`<div class="${premiumBadgeClass(prem)} etf-premium-badge">${prem>0?'+':''}${prem.toFixed(2)}%</div>`:'';
-    return`<div class="info-card" style="${borderStyle}"><div class="card-header"><div><div class="card-name" style="color:${color}">${etf.name}</div><div class="card-code">${code.toUpperCase()} &#183; NDX100</div></div><div style="text-align:right">${priceHtml}${premHtml}</div></div><div class="metric"><span class="metric-label">规模（亿元）</span><span class="metric-value" style="color:#fbbf24">${etf.size}</span></div><div class="metric"><span class="metric-label">综合费率</span><span class="metric-value" style="color:${feeColor(etf.fee_total)}">${etf.fee_total}%/年</span></div><div class="metric"><span class="metric-label">管理费</span><span class="metric-value">${etf.fee_mgmt}%</span></div><div class="metric"><span class="metric-label">托管费</span><span class="metric-value">${etf.fee_cust}%</span></div><div class="metric"><span class="metric-label">销售服务费</span><span class="metric-value">${etf.fee_svc}%</span></div><div class="fee-bar"><div class="fee-fill" style="width:${feeW}%;background:${feeColor(etf.fee_total)}"></div></div></div>`;
+    return`<div class="info-card" style="${borderStyle}"><div class="card-header"><div><div class="card-name" style="color:${color}">${etf.name}</div><div class="card-code">${code.toUpperCase()} &#183; ${INDEX_TAGS[currentIndex]}</div></div><div style="text-align:right">${priceHtml}${premHtml}</div></div><div class="metric"><span class="metric-label">规模（亿元）</span><span class="metric-value" style="color:#fbbf24">${etf.size}</span></div><div class="metric"><span class="metric-label">综合费率</span><span class="metric-value" style="color:${feeColor(etf.fee_total)}">${etf.fee_total}%/年</span></div><div class="metric"><span class="metric-label">管理费</span><span class="metric-value">${etf.fee_mgmt}%</span></div><div class="metric"><span class="metric-label">托管费</span><span class="metric-value">${etf.fee_cust}%</span></div><div class="metric"><span class="metric-label">销售服务费</span><span class="metric-value">${etf.fee_svc}%</span></div><div class="fee-bar"><div class="fee-fill" style="width:${feeW}%;background:${feeColor(etf.fee_total)}"></div></div></div>`;
   }).join('');
   document.getElementById('chartArea').innerHTML=
     '<div class="alert-info" style="margin-bottom:16px"><span>&#128161;</span>费率进度条越长=费率越高。溢价徽章：红=溢价，绿=折价。</div>'+
