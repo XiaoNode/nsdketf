@@ -1,0 +1,49 @@
+{
+  "generated": "2026-08-25 18:47:23",
+  "start_date": "2026-03-18",
+  "sources": {
+    "price_a": "Sina kline (money.finance.sina.com.cn)",
+    "price_b": "Tencent finance kline (web.ifzq.gtimg.cn)",
+    "nav": "Eastmoney fund NAV (api.fund.eastmoney.com/f10/lsjz)"
+  },
+  "codes": {
+    "sh513850": {
+      "sina_price_points": 160,
+      "tencent_price_points": 117,
+      "nav_points": 109,
+      "common_price_dates": 117,
+      "max_abs_premium_diff_pct": 0.0,
+      "diff_over_0.1pct_count": 0,
+      "sample_diffs": [],
+      "latest_sina_premium": {
+        "date": "2026-08-25",
+        "value": 5.4095,
+        "nav_date": "2026-08-24"
+      },
+      "latest_tencent_premium": {
+        "date": "2026-08-25",
+        "value": 5.4095,
+        "nav_date": "2026-08-24"
+      }
+    },
+    "sz159577": {
+      "sina_price_points": 160,
+      "tencent_price_points": 117,
+      "nav_points": 109,
+      "common_price_dates": 117,
+      "max_abs_premium_diff_pct": 0.0,
+      "diff_over_0.1pct_count": 0,
+      "sample_diffs": [],
+      "latest_sina_premium": {
+        "date": "2026-08-25",
+        "value": 5.1444,
+        "nav_date": "2026-08-24"
+      },
+      "latest_tencent_premium": {
+        "date": "2026-08-25",
+        "value": 5.1444,
+        "nav_date": "2026-08-24"
+      }
+    }
+  }
+}
