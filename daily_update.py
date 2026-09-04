@@ -695,6 +695,7 @@ def main(argv=None):
         (prepare_update(load_codes('etf_all.json'), 'etf_all.json', args.full_nav), 'etf'),
         (prepare_update(load_codes('sp500_all.json'), 'sp500_all.json', args.full_nav), 'sp500'),
         (prepare_update(load_codes('us50_all.json'), 'us50_all.json', args.full_nav), 'us50'),
+        (prepare_update(load_codes('djia_all.json'), 'djia_all.json', args.full_nav), 'djia'),
     ]
     failures = [failure for result, _ in results for failure in result['failures']]
     if failures:

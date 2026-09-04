@@ -81,6 +81,19 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
 .pos-val{color:var(--red)}
 .neg-val{color:var(--green)}
 .zero-val{color:var(--text2)}
+.holdings-mode .sidebar{display:none}
+.holdings-mode .tabs{display:none}
+.container.holdings-mode{grid-template-columns:1fr}
+.pf-toolbar{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:4px}
+.pf-field{display:flex;flex-direction:column;gap:4px}
+.pf-field label{font-size:12px;color:var(--text2)}
+.pf-input,.pf-select{padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px;min-width:150px}
+.pf-btn{padding:8px 16px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;font-size:13px;font-weight:600;align-self:flex-end}
+.pf-btn:hover{opacity:.9}
+.pf-btn-ghost{padding:8px 16px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;font-size:13px}
+.pf-btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
+.pf-account{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+.pf-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
 </style>
 </head>
 <body>
@@ -90,6 +103,8 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
   <button class="index-switch-btn active" data-idx="ndx">&#127912; 纳斯达克100</button>
   <button class="index-switch-btn" data-idx="sp500">&#128200; 标普500</button>
   <button class="index-switch-btn" data-idx="us50">&#127482;&#127480; 美国50</button>
+  <button class="index-switch-btn" data-idx="djia">&#127968;&#127482;&#127480; 道琼斯</button>
+  <button class="index-switch-btn" data-idx="holdings">&#128722; 我的持仓</button>
 </div>
   <div class="update-time" id="updateTime"></div>
 </div>
@@ -226,6 +241,15 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
 <script src="data/us50_data_2026-07.js"></script>
 <script src="data/us50_data_2026-08.js"></script>
 <script src="data/us50_data_2026-09.js"></script>
+<script src="data/djia_data_2026-01.js"></script>
+<script src="data/djia_data_2026-02.js"></script>
+<script src="data/djia_data_2026-03.js"></script>
+<script src="data/djia_data_2026-04.js"></script>
+<script src="data/djia_data_2026-05.js"></script>
+<script src="data/djia_data_2026-06.js"></script>
+<script src="data/djia_data_2026-07.js"></script>
+<script src="data/djia_data_2026-08.js"></script>
+<script src="data/djia_data_2026-09.js"></script>
     <script src="data/ndx_valuation.js"></script>
 <script>
 function collectMonthly(prefix, startYear, startMonth) {
@@ -271,18 +295,27 @@ function mergeMonthly(months) {
 const ETF_DATA = mergeMonthly(collectMonthly('ETF', 2024, 5));
 const SP500_DATA = mergeMonthly(collectMonthly('SP500', 2024, 5));
 const US50_DATA = mergeMonthly(collectMonthly('US50', 2025, 12));
+const DJIA_DATA = mergeMonthly(collectMonthly('DJIA', 2026, 1));
 
 let currentIndex='ndx';
-const INDEX_DATA={ndx:ETF_DATA,sp500:SP500_DATA,us50:US50_DATA};
-const PREMIUM_RANKING_EXCLUSIONS={ndx:new Set(['sz159509']),sp500:new Set(),us50:new Set()};
-const INDEX_NAMES={ndx:'纳斯达克100',sp500:'标普500',us50:'美国50 (MSCI)'};
-const INDEX_TAGS={ndx:'NDX100',sp500:'SPX500',us50:'MSCI US50'};
-const INDEX_SUBS={ndx:Object.keys(ETF_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率',sp500:Object.keys(SP500_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率',us50:Object.keys(US50_DATA).length+'只基金 · 近5个月逐日数据 · 价格/净值/折溢价/费率'};
+const INDEX_DATA={ndx:ETF_DATA,sp500:SP500_DATA,us50:US50_DATA,djia:DJIA_DATA};
+const PREMIUM_RANKING_EXCLUSIONS={ndx:new Set(['sz159509']),sp500:new Set(),us50:new Set(),djia:new Set()};
+const INDEX_NAMES={ndx:'纳斯达克100',sp500:'标普500',us50:'美国50 (MSCI)',djia:'道琼斯工业平均'};
+const INDEX_TAGS={ndx:'NDX100',sp500:'SPX500',us50:'MSCI US50',djia:'DJIA'};
+const INDEX_SUBS={ndx:Object.keys(ETF_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率',sp500:Object.keys(SP500_DATA).length+'只基金 · 近两年逐日数据 · 价格/净值/折溢价/费率',us50:Object.keys(US50_DATA).length+'只基金 · 近5个月逐日数据 · 价格/净值/折溢价/费率',djia:Object.keys(DJIA_DATA).length+'只基金 · 近5个月逐日数据 · 价格/净值/折溢价/费率'};
 let ETF_DATA_ACTIVE=ETF_DATA;
 
 function switchIndex(idx){
   if(idx===currentIndex)return;
   currentIndex=idx;
+  if(idx==='holdings'){
+    document.querySelector('.container').classList.add('holdings-mode');
+    document.querySelector('h1').innerHTML='&#128202; 我的持仓';
+    document.getElementById('idxSub').textContent='记录持仓 · 自动清算 · 跨设备同步';
+    if(typeof window.renderHoldings==='function')window.renderHoldings();
+    return;
+  }
+  document.querySelector('.container').classList.remove('holdings-mode');
   ETF_DATA_ACTIVE=INDEX_DATA[idx];
   ETF_CODES.length=0;
   ETF_CODES.push(...Object.keys(ETF_DATA_ACTIVE));
@@ -333,8 +366,11 @@ function getLatestDate(key){
   }
   return latest||'未知';
 }
+let LAST_UPDATE_NOTE='';
 function updateFreshness(){
-  document.getElementById('updateTime').textContent='数据截止: 价格 '+getLatestDate('price')+' · 净值 '+getLatestDate('nav');
+  let s='数据截止: 价格 '+getLatestDate('price')+' · 净值 '+getLatestDate('nav');
+  if(LAST_UPDATE_NOTE) s+=' · '+LAST_UPDATE_NOTE;
+  document.getElementById('updateTime').textContent=s;
 }
 function premiumClass(v){if(v===null)return'zero-val';if(v>0.5)return'pos-val';if(v<-0.5)return'neg-val';return'zero-val';}
 function premiumBadgeClass(v){if(v===null)return'premium-zero';if(v>0.5)return'premium-pos';if(v<-0.5)return'premium-neg';return'premium-zero';}
@@ -597,4 +633,14 @@ document.getElementById('chkAll').addEventListener('change',e=>{
 });
 document.getElementById('idxSub').textContent=INDEX_SUBS[currentIndex];
 renderAll();
-</script></body></html>
+
+// 显示脚本自动更新时间（GitHub Actions 写入 data/_last_update.json）
+fetch('data/_last_update.json').then(r=>r.ok?r.json():null).then(d=>{
+  if(d&&d.last_run_bj){
+    LAST_UPDATE_NOTE='自动更新于 '+d.last_run_bj+(d.trigger==='schedule'?' (定时)':' (手动)');
+    updateFreshness();
+  }
+}).catch(()=>{});
+</script>
+<script src="portfolio.js"></script>
+</body></html>

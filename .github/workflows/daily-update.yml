@@ -2,8 +2,10 @@ name: Daily ETF Update
 
 on:
   schedule:
-    # 北京时间每天 21:30（净值披露完成后）运行 = UTC 13:30
+    # 北京时间每天 21:30 初次抓取（A股已收盘，价格当日更新）
     - cron: '30 13 * * *'
+    # 北京时间每天 23:00 补抓（QDII T-1 净值基本披露完成，补全溢价）
+    - cron: '0 15 * * *'
   workflow_dispatch:  # 允许手动触发
 
 permissions:
@@ -33,6 +35,15 @@ jobs:
         run: python daily_update.py
         env:
           TZ: Asia/Shanghai  # 确保日期计算使用北京时间
+
+      - name: Record update timestamp
+        run: |
+          mkdir -p data
+          printf '{"last_run_utc":"%s","last_run_bj":"%s","trigger":"%s"}\n' \
+            "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            "$(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M:%S')" \
+            "${{ github.event_name }}" > data/_last_update.json
+          echo "Wrote data/_last_update.json: $(cat data/_last_update.json)"
 
       - name: Validate generated data
         run: python -m unittest discover -s tests -v
