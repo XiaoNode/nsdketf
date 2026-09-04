@@ -105,8 +105,34 @@
   };
 
   /* ---------- 持仓状态 ---------- */
-  let HOLDINGS = [];      // [{code, shares, costPerShare}]
+  let HOLDINGS = [];      // [{code, lots:[{date, shares, price, fee?}]}]
   let GH_CONNECTED = false;
+
+  /* ---------- 交易费设置 (默认万 2.5 + 单笔最低 5 元; 可改) ---------- */
+  const FEE_DEFAULTS = { rate: 0.00025, min: 5, custom: false };  // 万2.5 = 0.00025
+  const FEE_KEY = 'nsdketf_fee_settings';
+  function loadFeeSettings() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(FEE_KEY) || 'null');
+      if (raw && typeof raw.rate === 'number') {
+        return {
+          rate: raw.rate,
+          min: typeof raw.min === 'number' ? raw.min : 0,
+          custom: true
+        };
+      }
+    } catch (_) { /* ignore */ }
+    return Object.assign({}, FEE_DEFAULTS);
+  }
+  function saveFeeSettings(s) {
+    localStorage.setItem(FEE_KEY, JSON.stringify({ rate: s.rate, min: s.min }));
+  }
+  // 单笔手续费 = max(成交额 * 费率, 单笔最低)
+  function calcFee(amount, settings) {
+    const r = settings ? settings.rate : FEE_DEFAULTS.rate;
+    const m = settings && typeof settings.min === 'number' ? settings.min : FEE_DEFAULTS.min;
+    return Math.max(amount * r, m);
+  }
 
   async function initHoldings() {
     // 1) 本地缓存优先 (离线可用)
@@ -140,27 +166,38 @@
   }
 
   /* ---------- 计算 ---------- */
-  function computeRow(h) {
+  function computeRow(h, feeSettings) {
     const etf = ALL_ETF[h.code];
     if (!etf) return null;
     const price = (etf.price && etf.price.length) ? etf.price[etf.price.length - 1].value : null;
     const lots = (h.lots || []).filter(l => Number(l.shares) > 0);
-    let shares = 0, cost = 0;
-    lots.forEach(l => { const s = Number(l.shares), p = Number(l.price); shares += s; cost += s * p; });
+    let shares = 0, cost = 0, totalFee = 0;
+    lots.forEach(l => {
+      const s = Number(l.shares), p = Number(l.price);
+      shares += s;
+      const amount = s * p;
+      cost += amount;
+      // 旧数据没 fee 字段视为 0; 新数据按当时费率算
+      totalFee += (typeof l.fee === 'number' && l.fee >= 0) ? l.fee : 0;
+    });
     const avgCost = shares > 0 ? cost / shares : null;
+    const netCost = cost + totalFee;          // 实际投入 = 买入金额 + 手续费
     const marketValue = price != null ? shares * price : null;
-    const pnl = marketValue != null ? marketValue - cost : null;
-    const pnlPct = (cost > 0 && pnl != null) ? (pnl / cost * 100) : null;
-    return { etf, price, shares, avgCost, cost, marketValue, pnl, pnlPct, lots };
+    const pnl = marketValue != null ? marketValue - netCost : null;   // 扣除手续费
+    const pnlPct = (netCost > 0 && pnl != null) ? (pnl / netCost * 100) : null;
+    return { etf, price, shares, avgCost, cost, totalFee, netCost, marketValue, pnl, pnlPct, lots };
   }
 
-  function lotValues(lot, price) {
+  function lotValues(lot, price, feeSettings) {
     const s = Number(lot.shares), p = Number(lot.price);
     const amount = s * p;
     const mv = price != null ? s * price : null;
-    const pnl = mv != null ? mv - amount : null;
-    const pct = (amount > 0 && pnl != null) ? (pnl / amount * 100) : null;
-    return { s, p, amount, mv, pnl, pct, date: lot.date };
+    // 优先用当时保存的 fee; 没保存则视为 0 (旧数据不重算, 避免历史费率不同导致结果突变)
+    const fee = (typeof lot.fee === 'number' && lot.fee >= 0) ? lot.fee : 0;
+    const netCost = amount + fee;
+    const pnl = mv != null ? mv - netCost : null;
+    const pct = (netCost > 0 && pnl != null) ? (pnl / netCost * 100) : null;
+    return { s, p, amount, fee, netCost, mv, pnl, pct, date: lot.date };
   }
 
   function normalizeHolding(h) {
@@ -168,10 +205,15 @@
     if (Array.isArray(h.lots)) {
       h.lots = h.lots
         .filter(l => l && Number(l.shares) > 0)
-        .map(l => ({ date: (l.date || '').toString(), shares: Number(l.shares), price: Number(l.price) }));
+        .map(l => ({
+          date: (l.date || '').toString(),
+          shares: Number(l.shares),
+          price: Number(l.price),
+          fee: (typeof l.fee === 'number' && l.fee >= 0) ? l.fee : 0  // 旧数据无 fee 视为 0, 不重算
+        }));
     } else if (h.shares != null && h.costPerShare != null) {
       // 兼容旧版单笔均价格式
-      h.lots = [{ date: '', shares: Number(h.shares), price: Number(h.costPerShare) }];
+      h.lots = [{ date: '', shares: Number(h.shares), price: Number(h.costPerShare), fee: 0 }];
     } else {
       h.lots = [];
     }
@@ -184,14 +226,19 @@
   }
 
   function computeSummary() {
-    let totalMV = 0, totalCost = 0, hasPrice = false;
+    let totalMV = 0, totalCost = 0, totalFee = 0, hasPrice = false;
     HOLDINGS.forEach(h => {
       const r = computeRow(h);
-      if (r && r.marketValue != null) { totalMV += r.marketValue; totalCost += r.cost; hasPrice = true; }
+      if (r && r.marketValue != null) {
+        totalMV += r.marketValue;
+        totalCost += r.netCost;   // 投入含费
+        totalFee += r.totalFee;
+        hasPrice = true;
+      }
     });
     const totalPnl = totalMV - totalCost;
     const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost * 100) : null;
-    return { totalMV, totalCost, totalPnl, totalPnlPct, hasPrice };
+    return { totalMV, totalCost, totalFee, totalPnl, totalPnlPct, hasPrice };
   }
 
   /* ---------- 格式化 ---------- */
@@ -301,14 +348,22 @@
 
 <div class="chart-card">
   <h3>&#10133; 添加建仓记录</h3>
-  <div class="chart-desc">按买入日期记录每笔建仓（分批买入可加多条）。系统按最新价自动清算每笔与汇总。</div>
-  <div class="pf-toolbar" style="margin-top:12px;flex-wrap:wrap">
+  <div class="chart-desc">按买入日期记录每笔建仓（分批买入可加多条）。手续费默认按下方费率自动计算，也可手动修改。</div>
+  <div class="pf-toolbar" style="margin-top:12px;align-items:flex-end;flex-wrap:wrap">
     <div class="pf-field"><label>ETF</label><select id="pfCode" class="pf-select">${codeOptionsHTML()}</select></div>
     <div class="pf-field"><label>买入日期</label><input type="date" id="pfDate" class="pf-input"></div>
     <div class="pf-field"><label>份额</label><input type="number" id="pfShares" class="pf-input" placeholder="如 100" min="0" step="any"></div>
     <div class="pf-field"><label>买入单价(¥/份)</label><input type="number" id="pfCost" class="pf-input" placeholder="如 1.234" min="0" step="any"></div>
-    <div class="pf-field" style="min-width:120px"><label>投入金额</label><span id="pfAmountPreview" style="padding:6px 10px;font-weight:600">¥0.00</span></div>
+    <div class="pf-field"><label>手续费(¥)</label><input type="number" id="pfFee" class="pf-input" placeholder="自动" min="0" step="any"></div>
+    <div class="pf-field" style="min-width:110px"><label>成交额</label><span id="pfAmountPreview" style="padding:6px 10px;font-weight:600">¥0.00</span></div>
+    <div class="pf-field" style="min-width:110px"><label>成本(含费)</label><span id="pfNetCostPreview" style="padding:6px 10px;font-weight:600;color:var(--text)">¥0.00</span></div>
     <button class="pf-btn" id="btnAdd">添加记录</button>
+  </div>
+  <div class="pf-toolbar" style="margin-top:10px;gap:12px;flex-wrap:wrap;border-top:1px solid rgba(128,128,128,.15);padding-top:10px">
+    <div style="font-size:12px;color:var(--text2)">默认费率</div>
+    <div class="pf-field" style="min-width:90px"><label style="font-size:11px">佣金费率</label><input type="number" id="pfFeeRate" class="pf-input" value="${(loadFeeSettings().rate * 100).toFixed(4)}" min="0" step="any" style="font-size:12px"></div>
+    <div class="pf-field" style="min-width:80px"><label style="font-size:11px">单笔最低(¥)</label><input type="number" id="pfMinFee" class="pf-input" value="${loadFeeSettings().min}" min="0" step="any" style="font-size:12px"></div>
+    <div style="font-size:12px;color:var(--text2);margin-left:auto">默认万2.5、最低5元；修改后只影响新添加的记录。</div>
   </div>
 </div>
 
@@ -318,7 +373,7 @@
   <h3>&#128202; 持仓明细</h3>
   <div class="chart-desc">每笔建仓独立清算，同一 ETF 的多笔合并为汇总行；顶部卡片为总持仓。红=盈利，绿=亏损（A股惯例）。</div>
   <table class="premium-table" style="margin-top:8px">
-    <thead><tr><th>名称 / 代码</th><th>市场</th><th>日期</th><th>份额</th><th>买入单价</th><th>投入金额</th><th>最新价</th><th>当前市值</th><th>盈亏额</th><th>盈亏%</th><th></th></tr></thead>
+    <thead><tr><th>名称 / 代码</th><th>市场</th><th>日期</th><th>份额</th><th>买入单价</th><th>手续费</th><th>投入(含费)</th><th>最新价</th><th>当前市值</th><th>盈亏额</th><th>盈亏%</th><th></th></tr></thead>
     <tbody id="pfTbody"></tbody>
   </table>
 </div>`;
@@ -343,26 +398,55 @@
     const dateEl = document.getElementById('pfDate');
     const sharesEl = document.getElementById('pfShares');
     const costEl = document.getElementById('pfCost');
+    const feeEl = document.getElementById('pfFee');
+    const rateEl = document.getElementById('pfFeeRate');
+    const minEl = document.getElementById('pfMinFee');
     const amtEl = document.getElementById('pfAmountPreview');
+    const netEl = document.getElementById('pfNetCostPreview');
     if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
+
+    const getSettings = () => {
+      const rate = parseFloat(rateEl ? rateEl.value : '') / 100;
+      const min = parseFloat(minEl ? minEl.value : '');
+      return { rate: isFinite(rate) && rate >= 0 ? rate : FEE_DEFAULTS.rate, min: isFinite(min) && min >= 0 ? min : FEE_DEFAULTS.min };
+    };
     const previewAmount = () => {
       const s = parseFloat(sharesEl.value), p = parseFloat(costEl.value);
-      amtEl.textContent = '¥' + ((isFinite(s) && isFinite(p)) ? (s * p).toFixed(2) : '0.00');
+      const amount = (isFinite(s) && isFinite(p)) ? s * p : 0;
+      if (amtEl) amtEl.textContent = '¥' + amount.toFixed(2);
+      // 如果用户没手动改过手续费, 按当前费率自动算
+      if (feeEl && !feeEl.dataset.userEdited) {
+        const settings = getSettings();
+        feeEl.value = amount > 0 ? calcFee(amount, settings).toFixed(2) : '';
+      }
+      const fee = parseFloat(feeEl ? feeEl.value : '');
+      const net = (isFinite(fee) && fee >= 0) ? amount + fee : amount;
+      if (netEl) netEl.textContent = '¥' + net.toFixed(2);
     };
     if (sharesEl) sharesEl.addEventListener('input', previewAmount);
     if (costEl) costEl.addEventListener('input', previewAmount);
+    if (feeEl) feeEl.addEventListener('input', () => { feeEl.dataset.userEdited = '1'; previewAmount(); });
+    if (rateEl) rateEl.addEventListener('input', previewAmount);
+    if (minEl) minEl.addEventListener('input', previewAmount);
 
     if (add) add.addEventListener('click', () => {
       const code = codeEl.value;
       const date = dateEl ? dateEl.value : '';
       const shares = parseFloat(sharesEl.value);
       const price = parseFloat(costEl.value);
+      const amount = shares * price;
+      let fee = parseFloat(feeEl ? feeEl.value : '');
+      if (!isFinite(fee) || fee < 0) fee = calcFee(amount, getSettings());
       if (!code || !(shares > 0) || !(price > 0)) { toast('请填写有效的 ETF / 份额 / 买入单价', true); return; }
+      // 保存用户设置的默认费率
+      const settings = getSettings();
+      saveFeeSettings(settings);
       let ex = HOLDINGS.find(h => h.code === code);
       if (!ex) { ex = { code, lots: [] }; HOLDINGS.push(ex); }
-      ex.lots.push({ date: date || '', shares, price });
+      ex.lots.push({ date: date || '', shares, price, fee });
       persistHoldings(); renderHoldingsTable();
-      sharesEl.value = ''; costEl.value = ''; if (amtEl) amtEl.textContent = '¥0.00';
+      sharesEl.value = ''; costEl.value = ''; if (feeEl) { feeEl.value = ''; delete feeEl.dataset.userEdited; }
+      if (amtEl) amtEl.textContent = '¥0.00'; if (netEl) netEl.textContent = '¥0.00';
     });
 
     const refresh = document.getElementById('btnRefresh');
@@ -414,7 +498,7 @@
     const sumBox = document.getElementById('pfSummary');
     if (!tbody) return;
     if (!HOLDINGS.length) {
-      tbody.innerHTML = '<tr><td colspan="11" style="color:var(--text2);text-align:center;padding:24px">暂无持仓，先在上方添加建仓记录。</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="12" style="color:var(--text2);text-align:center;padding:24px">暂无持仓，先在上方添加建仓记录。</td></tr>';
       if (sumBox) sumBox.innerHTML = '';
       return;
     }
@@ -429,7 +513,8 @@
         <td>${mkt}</td>
         <td style="font-weight:600">${r.shares}</td>
         <td>${fmtPrice(r.avgCost)}</td>
-        <td style="font-weight:600">${fmtMoney(r.cost)}</td>
+        <td style="font-weight:600">${fmtMoney(r.totalFee)}</td>
+        <td style="font-weight:600">${fmtMoney(r.netCost)}</td>
         <td>${fmtPrice(r.price)}</td>
         <td style="font-weight:600">${fmtMoney(r.marketValue)}</td>
         <td class="${pnlClass(r.pnl)}" style="font-weight:600">${r.pnl == null ? '—' : (r.pnl >= 0 ? '+' : '') + '¥' + r.pnl.toFixed(2)}</td>
@@ -444,7 +529,8 @@
           <td>${esc(lot.date || '—')}</td>
           <td>${lv.s}</td>
           <td>${fmtPrice(lv.p)}</td>
-          <td>${fmtMoney(lv.amount)}</td>
+          <td>${fmtMoney(lv.fee)}</td>
+          <td>${fmtMoney(lv.netCost)}</td>
           <td>${fmtPrice(r.price)}</td>
           <td>${fmtMoney(lv.mv)}</td>
           <td class="${pnlClass(lv.pnl)}">${lv.pnl == null ? '—' : (lv.pnl >= 0 ? '+' : '') + '¥' + lv.pnl.toFixed(2)}</td>
@@ -470,9 +556,10 @@
       sumBox.innerHTML = `
 <div class="pf-summary">
   <div class="info-card"><div class="card-header"><div class="card-name">总市值</div></div><div class="metric"><span class="metric-label">按最新价合计</span><span class="metric-value" style="font-size:16px">${fmtMoney(s.totalMV)}</span></div></div>
-  <div class="info-card"><div class="card-header"><div class="card-name">总投入</div></div><div class="metric"><span class="metric-label">Σ 每笔建仓金额</span><span class="metric-value" style="font-size:16px">${fmtMoney(s.totalCost)}</span></div></div>
-  <div class="info-card"><div class="card-header"><div class="card-name">总盈亏</div></div><div class="metric"><span class="metric-label">市值 − 投入</span><span class="metric-value ${pnlClass(s.totalPnl)}" style="font-size:16px">${s.totalPnl == null ? '—' : (s.totalPnl >= 0 ? '+' : '') + '¥' + s.totalPnl.toFixed(2)}</span></div></div>
-  <div class="info-card"><div class="card-header"><div class="card-name">总收益率</div></div><div class="metric"><span class="metric-label">盈亏 / 投入</span><span class="metric-value ${pnlClass(s.totalPnlPct)}" style="font-size:16px">${fmtPct(s.totalPnlPct)}</span></div></div>
+  <div class="info-card"><div class="card-header"><div class="card-name">总投入(含费)</div></div><div class="metric"><span class="metric-label">Σ 成交额 + 手续费</span><span class="metric-value" style="font-size:16px">${fmtMoney(s.totalCost)}</span></div></div>
+  <div class="info-card"><div class="card-header"><div class="card-name">总手续费</div></div><div class="metric"><span class="metric-label">Σ 每笔交易费用</span><span class="metric-value" style="font-size:16px">${fmtMoney(s.totalFee)}</span></div></div>
+  <div class="info-card"><div class="card-header"><div class="card-name">总盈亏</div></div><div class="metric"><span class="metric-label">市值 − 投入(含费)</span><span class="metric-value ${pnlClass(s.totalPnl)}" style="font-size:16px">${s.totalPnl == null ? '—' : (s.totalPnl >= 0 ? '+' : '') + '¥' + s.totalPnl.toFixed(2)}</span></div></div>
+  <div class="info-card"><div class="card-header"><div class="card-name">总收益率</div></div><div class="metric"><span class="metric-label">盈亏 / 投入(含费)</span><span class="metric-value ${pnlClass(s.totalPnlPct)}" style="font-size:16px">${fmtPct(s.totalPnlPct)}</span></div></div>
 </div>`;
     }
   }
