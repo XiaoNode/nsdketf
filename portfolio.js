@@ -48,9 +48,32 @@
       }
       return r.json();
     },
+    async findExistingGist() {
+      // 跨设备：先在本账号下查找已存在的持仓 Gist 并复用，避免每台浏览器各建一个
+      let url = 'https://api.github.com/gists?per_page=100';
+      while (url) {
+        const r = await fetch(url, { headers: this.headers() });
+        if (!r.ok) return null;
+        const list = await r.json();
+        if (!Array.isArray(list) || list.length === 0) break;
+        for (const g of list) {
+          if (g.files && g.files[this.FILENAME]) return g.id;
+        }
+        const link = (typeof r.headers && r.headers.get) ? r.headers.get('link') : null;
+        url = null;
+        if (link) {
+          const m = link.match(/<([^>]+)>;\s*rel="next"/);
+          if (m) url = m[1];
+        }
+      }
+      return null;
+    },
     async ensureGist() {
       let id = this.gistId();
       if (id) return id;
+      // 跨设备：先查本账号下是否已有持仓 Gist，复用之
+      id = await this.findExistingGist();
+      if (id) { localStorage.setItem(this.GIST_KEY, id); return id; }
       const r = await fetch('https://api.github.com/gists', {
         method: 'POST', headers: this.headers(),
         body: JSON.stringify({ description: 'nsdketf 持仓数据 (自动生成)', public: false, files: { [this.FILENAME]: { content: JSON.stringify({ version: 1, holdings: [] }, null, 2) } } })
@@ -89,13 +112,13 @@
     // 1) 本地缓存优先 (离线可用)
     try {
       const c = localStorage.getItem(GistStore.CACHE_KEY);
-      if (c) HOLDINGS = JSON.parse(c);
+      if (c) HOLDINGS = loadHoldings(JSON.parse(c));
     } catch (e) { /* ignore */ }
     // 2) 若已连接, 以 Gist 为准覆盖
     if (GistStore.token() && GistStore.gistId()) {
       try {
         const h = await GistStore.load();
-        HOLDINGS = h;
+        HOLDINGS = loadHoldings(h);
         localStorage.setItem(GistStore.CACHE_KEY, JSON.stringify(HOLDINGS));
         GH_CONNECTED = true;
       } catch (e) {
@@ -121,19 +144,50 @@
     const etf = ALL_ETF[h.code];
     if (!etf) return null;
     const price = (etf.price && etf.price.length) ? etf.price[etf.price.length - 1].value : null;
-    const shares = Number(h.shares), cost = Number(h.costPerShare);
+    const lots = (h.lots || []).filter(l => Number(l.shares) > 0);
+    let shares = 0, cost = 0;
+    lots.forEach(l => { const s = Number(l.shares), p = Number(l.price); shares += s; cost += s * p; });
+    const avgCost = shares > 0 ? cost / shares : null;
     const marketValue = price != null ? shares * price : null;
-    const costValue = shares * cost;
-    const pnl = marketValue != null ? marketValue - costValue : null;
-    const pnlPct = (costValue > 0 && pnl != null) ? (pnl / costValue * 100) : null;
-    return { etf, price, shares, cost, marketValue, costValue, pnl, pnlPct };
+    const pnl = marketValue != null ? marketValue - cost : null;
+    const pnlPct = (cost > 0 && pnl != null) ? (pnl / cost * 100) : null;
+    return { etf, price, shares, avgCost, cost, marketValue, pnl, pnlPct, lots };
+  }
+
+  function lotValues(lot, price) {
+    const s = Number(lot.shares), p = Number(lot.price);
+    const amount = s * p;
+    const mv = price != null ? s * price : null;
+    const pnl = mv != null ? mv - amount : null;
+    const pct = (amount > 0 && pnl != null) ? (pnl / amount * 100) : null;
+    return { s, p, amount, mv, pnl, pct, date: lot.date };
+  }
+
+  function normalizeHolding(h) {
+    if (!h || !h.code || !ALL_ETF[h.code]) return null;
+    if (Array.isArray(h.lots)) {
+      h.lots = h.lots
+        .filter(l => l && Number(l.shares) > 0)
+        .map(l => ({ date: (l.date || '').toString(), shares: Number(l.shares), price: Number(l.price) }));
+    } else if (h.shares != null && h.costPerShare != null) {
+      // 兼容旧版单笔均价格式
+      h.lots = [{ date: '', shares: Number(h.shares), price: Number(h.costPerShare) }];
+    } else {
+      h.lots = [];
+    }
+    return h;
+  }
+
+  function loadHoldings(arr) {
+    if (!Array.isArray(arr)) return [];
+    return arr.map(normalizeHolding).filter(Boolean);
   }
 
   function computeSummary() {
     let totalMV = 0, totalCost = 0, hasPrice = false;
     HOLDINGS.forEach(h => {
       const r = computeRow(h);
-      if (r && r.marketValue != null) { totalMV += r.marketValue; totalCost += r.costValue; hasPrice = true; }
+      if (r && r.marketValue != null) { totalMV += r.marketValue; totalCost += r.cost; hasPrice = true; }
     });
     const totalPnl = totalMV - totalCost;
     const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost * 100) : null;
@@ -207,7 +261,7 @@
         await GistStore.ensureGist();
         GH_CONNECTED = true;
         const h = await GistStore.load();
-        HOLDINGS = h;
+        HOLDINGS = loadHoldings(h);
         localStorage.setItem(GistStore.CACHE_KEY, JSON.stringify(HOLDINGS));
         toast('已连接 @' + me.login);
         renderHoldings();
@@ -246,13 +300,15 @@
 <div id="pfToast" style="display:none;padding:8px 14px;border-radius:8px;margin-bottom:12px;font-size:12px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.3)"></div>
 
 <div class="chart-card">
-  <h3>&#10133; 添加持仓</h3>
-  <div class="chart-desc">选择 ETF、填写持有份额与成本价（均价）。保存后按最新价自动清算。</div>
-  <div class="pf-toolbar" style="margin-top:12px">
+  <h3>&#10133; 添加建仓记录</h3>
+  <div class="chart-desc">按买入日期记录每笔建仓（分批买入可加多条）。系统按最新价自动清算每笔与汇总。</div>
+  <div class="pf-toolbar" style="margin-top:12px;flex-wrap:wrap">
     <div class="pf-field"><label>ETF</label><select id="pfCode" class="pf-select">${codeOptionsHTML()}</select></div>
-    <div class="pf-field"><label>持有份额</label><input type="number" id="pfShares" class="pf-input" placeholder="如 1000" min="0" step="any"></div>
-    <div class="pf-field"><label>成本价（¥/份）</label><input type="number" id="pfCost" class="pf-input" placeholder="如 1.234" min="0" step="any"></div>
-    <button class="pf-btn" id="btnAdd">添加 / 更新</button>
+    <div class="pf-field"><label>买入日期</label><input type="date" id="pfDate" class="pf-input"></div>
+    <div class="pf-field"><label>份额</label><input type="number" id="pfShares" class="pf-input" placeholder="如 100" min="0" step="any"></div>
+    <div class="pf-field"><label>买入单价(¥/份)</label><input type="number" id="pfCost" class="pf-input" placeholder="如 1.234" min="0" step="any"></div>
+    <div class="pf-field" style="min-width:120px"><label>投入金额</label><span id="pfAmountPreview" style="padding:6px 10px;font-weight:600">¥0.00</span></div>
+    <button class="pf-btn" id="btnAdd">添加记录</button>
   </div>
 </div>
 
@@ -260,9 +316,9 @@
 
 <div class="chart-card">
   <h3>&#128202; 持仓明细</h3>
-  <div class="chart-desc">市值 = 份额 × 最新价；盈亏 = 市值 − 成本。红=盈利，绿=亏损（A股惯例）。</div>
+  <div class="chart-desc">每笔建仓独立清算，同一 ETF 的多笔合并为汇总行；顶部卡片为总持仓。红=盈利，绿=亏损（A股惯例）。</div>
   <table class="premium-table" style="margin-top:8px">
-    <thead><tr><th>名称 / 代码</th><th>市场</th><th>份额</th><th>成本价</th><th>最新价</th><th>市值</th><th>盈亏额</th><th>盈亏%</th><th></th></tr></thead>
+    <thead><tr><th>名称 / 代码</th><th>市场</th><th>日期</th><th>份额</th><th>买入单价</th><th>投入金额</th><th>最新价</th><th>当前市值</th><th>盈亏额</th><th>盈亏%</th><th></th></tr></thead>
     <tbody id="pfTbody"></tbody>
   </table>
 </div>`;
@@ -283,22 +339,36 @@
 
   function bindHoldingsPanel() {
     const add = document.getElementById('btnAdd');
+    const codeEl = document.getElementById('pfCode');
+    const dateEl = document.getElementById('pfDate');
+    const sharesEl = document.getElementById('pfShares');
+    const costEl = document.getElementById('pfCost');
+    const amtEl = document.getElementById('pfAmountPreview');
+    if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
+    const previewAmount = () => {
+      const s = parseFloat(sharesEl.value), p = parseFloat(costEl.value);
+      amtEl.textContent = '¥' + ((isFinite(s) && isFinite(p)) ? (s * p).toFixed(2) : '0.00');
+    };
+    if (sharesEl) sharesEl.addEventListener('input', previewAmount);
+    if (costEl) costEl.addEventListener('input', previewAmount);
+
     if (add) add.addEventListener('click', () => {
-      const code = document.getElementById('pfCode').value;
-      const shares = parseFloat(document.getElementById('pfShares').value);
-      const cost = parseFloat(document.getElementById('pfCost').value);
-      if (!code || !(shares > 0) || !(cost > 0)) { toast('请填写有效的 ETF / 份额 / 成本价', true); return; }
-      const ex = HOLDINGS.find(h => h.code === code);
-      if (ex) { ex.shares = shares; ex.costPerShare = cost; }
-      else HOLDINGS.push({ code, shares, costPerShare: cost });
-      persistHoldings();
-      renderHoldingsTable();
+      const code = codeEl.value;
+      const date = dateEl ? dateEl.value : '';
+      const shares = parseFloat(sharesEl.value);
+      const price = parseFloat(costEl.value);
+      if (!code || !(shares > 0) || !(price > 0)) { toast('请填写有效的 ETF / 份额 / 买入单价', true); return; }
+      let ex = HOLDINGS.find(h => h.code === code);
+      if (!ex) { ex = { code, lots: [] }; HOLDINGS.push(ex); }
+      ex.lots.push({ date: date || '', shares, price });
+      persistHoldings(); renderHoldingsTable();
+      sharesEl.value = ''; costEl.value = ''; if (amtEl) amtEl.textContent = '¥0.00';
     });
 
     const refresh = document.getElementById('btnRefresh');
     if (refresh) refresh.addEventListener('click', async () => {
       if (!GH_CONNECTED) { toast('未连接，使用本浏览器数据'); renderHoldingsTable(); return; }
-      try { HOLDINGS = await GistStore.load(); localStorage.setItem(GistStore.CACHE_KEY, JSON.stringify(HOLDINGS)); renderHoldingsTable(); toast('已从 Gist 刷新'); }
+      try { HOLDINGS = loadHoldings(await GistStore.load()); localStorage.setItem(GistStore.CACHE_KEY, JSON.stringify(HOLDINGS)); renderHoldingsTable(); toast('已从 Gist 刷新'); }
       catch (e) { toast('刷新失败: ' + e.message, true); }
     });
 
@@ -322,8 +392,8 @@
         try {
           const data = JSON.parse(reader.result);
           if (!Array.isArray(data.holdings)) throw new Error('格式错误');
-          HOLDINGS = data.holdings.filter(h => h && h.code && ALL_ETF[h.code]);
-          persistHoldings(); renderHoldingsTable(); toast('已导入 ' + HOLDINGS.length + ' 条');
+          HOLDINGS = loadHoldings(data.holdings);
+          persistHoldings(); renderHoldingsTable(); toast('已导入 ' + HOLDINGS.length + ' 只 ETF');
         } catch (err) { toast('导入失败: ' + err.message, true); }
       };
       reader.readAsText(f);
@@ -344,30 +414,54 @@
     const sumBox = document.getElementById('pfSummary');
     if (!tbody) return;
     if (!HOLDINGS.length) {
-      tbody.innerHTML = '<tr><td colspan="9" style="color:var(--text2);text-align:center;padding:24px">暂无持仓，先在上方添加。</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="11" style="color:var(--text2);text-align:center;padding:24px">暂无持仓，先在上方添加建仓记录。</td></tr>';
       if (sumBox) sumBox.innerHTML = '';
       return;
     }
     let rows = '';
     HOLDINGS.forEach(h => {
       const r = computeRow(h);
-      if (!r) return;
+      if (!r || !r.lots.length) return;
       const mkt = MARKET_LABEL[MARKET_OF[h.code]] || '—';
-      rows += `<tr>
-        <td><div style="font-weight:600">${esc(r.etf.name)}</div><div class="etf-code">${h.code.toUpperCase()}</div></td>
+      // 该 ETF 汇总行
+      rows += `<tr class="pf-subtotal">
+        <td colspan="2"><div style="font-weight:700">${esc(r.etf.name)}</div><div class="etf-code">${h.code.toUpperCase()}</div></td>
         <td>${mkt}</td>
-        <td>${r.shares}</td>
-        <td>${fmtPrice(r.cost)}</td>
+        <td style="font-weight:600">${r.shares}</td>
+        <td>${fmtPrice(r.avgCost)}</td>
+        <td style="font-weight:600">${fmtMoney(r.cost)}</td>
         <td>${fmtPrice(r.price)}</td>
-        <td>${fmtMoney(r.marketValue)}</td>
-        <td class="${pnlClass(r.pnl)}">${r.pnl == null ? '—' : (r.pnl >= 0 ? '+' : '') + '¥' + r.pnl.toFixed(2)}</td>
-        <td class="${pnlClass(r.pnlPct)}">${fmtPct(r.pnlPct)}</td>
-        <td><button class="pf-btn-ghost" data-del="${h.code}" style="padding:4px 10px">删除</button></td>
+        <td style="font-weight:600">${fmtMoney(r.marketValue)}</td>
+        <td class="${pnlClass(r.pnl)}" style="font-weight:600">${r.pnl == null ? '—' : (r.pnl >= 0 ? '+' : '') + '¥' + r.pnl.toFixed(2)}</td>
+        <td class="${pnlClass(r.pnlPct)}" style="font-weight:600">${fmtPct(r.pnlPct)}</td>
+        <td><button class="pf-btn-ghost" data-del-code="${h.code}">清仓</button></td>
       </tr>`;
+      // 每笔建仓明细
+      r.lots.forEach((lot, i) => {
+        const lv = lotValues(lot, r.price);
+        rows += `<tr class="pf-lot">
+          <td></td><td></td>
+          <td>${esc(lot.date || '—')}</td>
+          <td>${lv.s}</td>
+          <td>${fmtPrice(lv.p)}</td>
+          <td>${fmtMoney(lv.amount)}</td>
+          <td>${fmtPrice(r.price)}</td>
+          <td>${fmtMoney(lv.mv)}</td>
+          <td class="${pnlClass(lv.pnl)}">${lv.pnl == null ? '—' : (lv.pnl >= 0 ? '+' : '') + '¥' + lv.pnl.toFixed(2)}</td>
+          <td class="${pnlClass(lv.pct)}">${fmtPct(lv.pct)}</td>
+          <td><button class="pf-btn-ghost" data-del-lot="${h.code}|${i}">删除</button></td>
+        </tr>`;
+      });
     });
     tbody.innerHTML = rows;
-    tbody.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => {
-      HOLDINGS = HOLDINGS.filter(h => h.code !== b.dataset.del);
+    tbody.querySelectorAll('[data-del-lot]').forEach(b => b.addEventListener('click', () => {
+      const [code, idx] = b.dataset.delLot.split('|');
+      const ex = HOLDINGS.find(h => h.code === code);
+      if (ex) { ex.lots.splice(Number(idx), 1); if (!ex.lots.length) HOLDINGS = HOLDINGS.filter(h => h.code !== code); }
+      persistHoldings(); renderHoldingsTable();
+    }));
+    tbody.querySelectorAll('[data-del-code]').forEach(b => b.addEventListener('click', () => {
+      HOLDINGS = HOLDINGS.filter(h => h.code !== b.dataset.delCode);
       persistHoldings(); renderHoldingsTable();
     }));
 
@@ -376,9 +470,9 @@
       sumBox.innerHTML = `
 <div class="pf-summary">
   <div class="info-card"><div class="card-header"><div class="card-name">总市值</div></div><div class="metric"><span class="metric-label">按最新价合计</span><span class="metric-value" style="font-size:16px">${fmtMoney(s.totalMV)}</span></div></div>
-  <div class="info-card"><div class="card-header"><div class="card-name">总成本</div></div><div class="metric"><span class="metric-label">份额 × 成本价</span><span class="metric-value" style="font-size:16px">${fmtMoney(s.totalCost)}</span></div></div>
-  <div class="info-card"><div class="card-header"><div class="card-name">总盈亏</div></div><div class="metric"><span class="metric-label">市值 − 成本</span><span class="metric-value ${pnlClass(s.totalPnl)}" style="font-size:16px">${s.totalPnl == null ? '—' : (s.totalPnl >= 0 ? '+' : '') + '¥' + s.totalPnl.toFixed(2)}</span></div></div>
-  <div class="info-card"><div class="card-header"><div class="card-name">总收益率</div></div><div class="metric"><span class="metric-label">盈亏 / 成本</span><span class="metric-value ${pnlClass(s.totalPnlPct)}" style="font-size:16px">${fmtPct(s.totalPnlPct)}</span></div></div>
+  <div class="info-card"><div class="card-header"><div class="card-name">总投入</div></div><div class="metric"><span class="metric-label">Σ 每笔建仓金额</span><span class="metric-value" style="font-size:16px">${fmtMoney(s.totalCost)}</span></div></div>
+  <div class="info-card"><div class="card-header"><div class="card-name">总盈亏</div></div><div class="metric"><span class="metric-label">市值 − 投入</span><span class="metric-value ${pnlClass(s.totalPnl)}" style="font-size:16px">${s.totalPnl == null ? '—' : (s.totalPnl >= 0 ? '+' : '') + '¥' + s.totalPnl.toFixed(2)}</span></div></div>
+  <div class="info-card"><div class="card-header"><div class="card-name">总收益率</div></div><div class="metric"><span class="metric-label">盈亏 / 投入</span><span class="metric-value ${pnlClass(s.totalPnlPct)}" style="font-size:16px">${fmtPct(s.totalPnlPct)}</span></div></div>
 </div>`;
     }
   }
@@ -396,6 +490,6 @@
 
   // 仅 Node 环境导出 (供单元测试, 浏览器中 module 未定义, 无副作用)
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { computeRow, computeSummary, ALL_ETF, MARKET_OF, setHoldings: function (h) { HOLDINGS = h; } };
+    module.exports = { computeRow, computeSummary, lotValues, fmtPct, fmtMoney, fmtPrice, ALL_ETF, MARKET_OF, loadHoldings, setHoldings: function (h) { HOLDINGS = h; } };
   }
 })();
