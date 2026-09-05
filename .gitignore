@@ -19,3 +19,6 @@ Thumbs.db
 # 编辑器
 .vscode/
 .idea/
+
+# 智能体内部内存/产物（不入库）
+.workbuddy/
