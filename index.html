@@ -95,8 +95,20 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
 .pf-account{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px}
 .pf-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
 .pf-subtotal td{background:rgba(59,130,246,.07);border-top:1px solid rgba(255,255,255,.1)}
+.pf-subtotal{cursor:pointer}
+.pf-subtotal:hover td{background:rgba(59,130,246,.13)}
+.pf-caret{display:inline-block;width:12px;color:var(--text2);font-size:11px}
 .pf-lot td{font-size:12px;color:var(--text2)}
-.pf-lot td:nth-child(3){color:var(--text1);font-weight:600}
+.pf-lot td:nth-child(3){color:var(--text);font-weight:600}
+.pf-lot td:last-child{white-space:nowrap}
+.pf-lot td:last-child .pf-btn-mini+.pf-btn-mini{margin-left:6px}
+.pf-btn-mini{padding:3px 9px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;font-size:11px;line-height:1.5}
+.pf-btn-mini:hover{border-color:var(--accent);color:var(--accent)}
+.pf-btn-mini-danger{opacity:.35;border-color:transparent}
+.pf-btn-mini-danger:hover{opacity:1;border-color:rgba(239,68,68,.45);color:#f87171}
+.pf-input-mini{padding:3px 6px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;width:92px}
+.pf-input-mini:focus{outline:none;border-color:var(--accent)}
+.pf-lot-editing td{background:rgba(79,123,255,.06)}
 </style>
 </head>
 <body>
@@ -315,6 +327,9 @@ function switchIndex(idx){
     document.querySelector('.container').classList.add('holdings-mode');
     document.querySelector('h1').innerHTML='&#128202; 我的持仓';
     document.getElementById('idxSub').textContent='记录持仓 · 自动清算 · 跨设备同步';
+    document.querySelectorAll('.index-switch-btn').forEach(b=>{
+      b.classList.toggle('active',b.dataset.idx===idx);
+    });
     if(typeof window.renderHoldings==='function')window.renderHoldings();
     return;
   }

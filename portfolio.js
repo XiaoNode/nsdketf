@@ -107,9 +107,13 @@
   /* ---------- 持仓状态 ---------- */
   let HOLDINGS = [];      // [{code, lots:[{date, shares, price, fee?}]}]
   let GH_CONNECTED = false;
+  // 展开的 ETF code 集合; 默认空集 = 每个 ETF 下的建仓明细默认折叠
+  const EXPANDED = new Set();
+  // 正在编辑的建仓记录 {code, lot}; null 表示当前无编辑行
+  let EDITING = null;
 
-  /* ---------- 交易费设置 (默认万 2.5 + 单笔最低 5 元; 可改) ---------- */
-  const FEE_DEFAULTS = { rate: 0.00025, min: 5, custom: false };  // 万2.5 = 0.00025
+  /* ---------- 交易费设置 (默认万 1 + 单笔最低 0.1 元; 可改) ---------- */
+  const FEE_DEFAULTS = { rate: 0.0001, min: 0.1, custom: false };  // 万1 = 0.0001
   const FEE_KEY = 'nsdketf_fee_settings';
   function loadFeeSettings() {
     try {
@@ -133,6 +137,9 @@
     const m = settings && typeof settings.min === 'number' ? settings.min : FEE_DEFAULTS.min;
     return Math.max(amount * r, m);
   }
+  // 费率换算: 输入框按百分比填写, 旁注同步显示"万分之几"
+  function formatRatePct(rate) { return String(+((rate || 0) * 100).toFixed(6)); }
+  function formatRateWan(rate) { return '万' + String(+((rate || 0) * 10000).toFixed(4)); }
 
   async function initHoldings() {
     // 1) 本地缓存优先 (离线可用)
@@ -246,6 +253,19 @@
   const fmtPrice = v => v == null ? '—' : '¥' + v.toFixed(3);
   const fmtPct = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
   function pnlClass(v) { return v == null ? 'zero-val' : v >= 0 ? 'pos-val' : 'neg-val'; }
+  const fmtPnl = v => v == null ? '—' : (v >= 0 ? '+' : '') + '¥' + v.toFixed(2);
+
+  // 读取面板上当前的费率设置 (供新增与编辑保存共用)
+  function currentFeeSettings() {
+    const rateEl = document.getElementById('pfFeeRate');
+    const minEl = document.getElementById('pfMinFee');
+    const rate = rateEl ? parseFloat(rateEl.value) / 100 : NaN;
+    const min = minEl ? parseFloat(minEl.value) : NaN;
+    return {
+      rate: isFinite(rate) && rate >= 0 ? rate : FEE_DEFAULTS.rate,
+      min: isFinite(min) && min >= 0 ? min : FEE_DEFAULTS.min
+    };
+  }
 
   function toast(msg, isErr) {
     const el = document.getElementById('pfToast');
@@ -361,9 +381,10 @@
   </div>
   <div class="pf-toolbar" style="margin-top:10px;gap:12px;flex-wrap:wrap;border-top:1px solid rgba(128,128,128,.15);padding-top:10px">
     <div style="font-size:12px;color:var(--text2)">默认费率</div>
-    <div class="pf-field" style="min-width:90px"><label style="font-size:11px">佣金费率</label><input type="number" id="pfFeeRate" class="pf-input" value="${(loadFeeSettings().rate * 100).toFixed(4)}" min="0" step="any" style="font-size:12px"></div>
+    <div class="pf-field" style="min-width:90px"><label style="font-size:11px">佣金费率(%)</label><input type="number" id="pfFeeRate" class="pf-input" value="${formatRatePct(loadFeeSettings().rate)}" min="0" step="any" style="font-size:12px"></div>
     <div class="pf-field" style="min-width:80px"><label style="font-size:11px">单笔最低(¥)</label><input type="number" id="pfMinFee" class="pf-input" value="${loadFeeSettings().min}" min="0" step="any" style="font-size:12px"></div>
-    <div style="font-size:12px;color:var(--text2);margin-left:auto">默认万2.5、最低5元；修改后只影响新添加的记录。</div>
+    <div class="pf-field" style="min-width:60px"><label style="font-size:11px">换算</label><span id="pfRateHint" style="padding:6px 0;font-size:12px;color:var(--text)">${formatRateWan(loadFeeSettings().rate)}</span></div>
+    <div style="font-size:12px;color:var(--text2);margin-left:auto">默认万1、最低0.1元；修改后只影响新添加与编辑保存的记录。</div>
   </div>
 </div>
 
@@ -371,7 +392,7 @@
 
 <div class="chart-card">
   <h3>&#128202; 持仓明细</h3>
-  <div class="chart-desc">每笔建仓独立清算，同一 ETF 的多笔合并为汇总行；顶部卡片为总持仓。红=盈利，绿=亏损（A股惯例）。</div>
+  <div class="chart-desc">每笔建仓独立清算，同一 ETF 的多笔合并为汇总行并<strong>默认折叠</strong>，点击汇总行展开/收起明细，每笔均可编辑。红=盈利，绿=亏损（A股惯例）。</div>
   <table class="premium-table" style="margin-top:8px">
     <thead><tr><th>名称 / 代码</th><th>市场</th><th>日期</th><th>份额</th><th>买入单价</th><th>手续费</th><th>投入(含费)</th><th>最新价</th><th>当前市值</th><th>盈亏额</th><th>盈亏%</th><th></th></tr></thead>
     <tbody id="pfTbody"></tbody>
@@ -405,18 +426,16 @@
     const netEl = document.getElementById('pfNetCostPreview');
     if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
 
-    const getSettings = () => {
-      const rate = parseFloat(rateEl ? rateEl.value : '') / 100;
-      const min = parseFloat(minEl ? minEl.value : '');
-      return { rate: isFinite(rate) && rate >= 0 ? rate : FEE_DEFAULTS.rate, min: isFinite(min) && min >= 0 ? min : FEE_DEFAULTS.min };
-    };
+    const getSettings = currentFeeSettings;
     const previewAmount = () => {
       const s = parseFloat(sharesEl.value), p = parseFloat(costEl.value);
       const amount = (isFinite(s) && isFinite(p)) ? s * p : 0;
       if (amtEl) amtEl.textContent = '¥' + amount.toFixed(2);
+      const settings = getSettings();
+      const hintEl = document.getElementById('pfRateHint');
+      if (hintEl) hintEl.textContent = formatRateWan(settings.rate);
       // 如果用户没手动改过手续费, 按当前费率自动算
       if (feeEl && !feeEl.dataset.userEdited) {
-        const settings = getSettings();
         feeEl.value = amount > 0 ? calcFee(amount, settings).toFixed(2) : '';
       }
       const fee = parseFloat(feeEl ? feeEl.value : '');
@@ -444,6 +463,7 @@
       let ex = HOLDINGS.find(h => h.code === code);
       if (!ex) { ex = { code, lots: [] }; HOLDINGS.push(ex); }
       ex.lots.push({ date: date || '', shares, price, fee });
+      EXPANDED.add(code);          // 刚添加的 ETF 自动展开, 便于确认记录已写入
       persistHoldings(); renderHoldingsTable();
       sharesEl.value = ''; costEl.value = ''; if (feeEl) { feeEl.value = ''; delete feeEl.dataset.userEdited; }
       if (amtEl) amtEl.textContent = '¥0.00'; if (netEl) netEl.textContent = '¥0.00';
@@ -507,23 +527,43 @@
       const r = computeRow(h);
       if (!r || !r.lots.length) return;
       const mkt = MARKET_LABEL[MARKET_OF[h.code]] || '—';
-      // 该 ETF 汇总行
-      rows += `<tr class="pf-subtotal">
-        <td colspan="2"><div style="font-weight:700">${esc(r.etf.name)}</div><div class="etf-code">${h.code.toUpperCase()}</div></td>
+      const open = EXPANDED.has(h.code);
+      // 该 ETF 汇总行 (整行可点击展开/折叠该 ETF 的建仓明细)
+      rows += `<tr class="pf-subtotal" data-toggle-code="${h.code}" title="点击${open ? '折叠' : '展开'}建仓明细">
+        <td><div style="display:flex;align-items:center;gap:8px"><span class="pf-caret">${open ? '&#9662;' : '&#9656;'}</span><div><div style="font-weight:700">${esc(r.etf.name)}</div><div class="etf-code">${h.code.toUpperCase()}</div></div></div></td>
         <td>${mkt}</td>
+        <td style="color:var(--text2)">${r.lots.length} 笔</td>
         <td style="font-weight:600">${r.shares}</td>
         <td>${fmtPrice(r.avgCost)}</td>
         <td style="font-weight:600">${fmtMoney(r.totalFee)}</td>
         <td style="font-weight:600">${fmtMoney(r.netCost)}</td>
         <td>${fmtPrice(r.price)}</td>
         <td style="font-weight:600">${fmtMoney(r.marketValue)}</td>
-        <td class="${pnlClass(r.pnl)}" style="font-weight:600">${r.pnl == null ? '—' : (r.pnl >= 0 ? '+' : '') + '¥' + r.pnl.toFixed(2)}</td>
+        <td class="${pnlClass(r.pnl)}" style="font-weight:600">${fmtPnl(r.pnl)}</td>
         <td class="${pnlClass(r.pnlPct)}" style="font-weight:600">${fmtPct(r.pnlPct)}</td>
-        <td><button class="pf-btn-ghost" data-del-code="${h.code}">清仓</button></td>
+        <td><button class="pf-btn-mini" data-clear-code="${h.code}">清仓</button></td>
       </tr>`;
-      // 每笔建仓明细
+      if (!open) return;
+      // 每笔建仓明细 (折叠时不渲染)
       r.lots.forEach((lot, i) => {
         const lv = lotValues(lot, r.price);
+        const editing = EDITING && EDITING.code === h.code && EDITING.lot === lot;
+        if (editing) {
+          rows += `<tr class="pf-lot pf-lot-editing">
+            <td></td><td></td>
+            <td><input type="date" id="pfEditDate" class="pf-input-mini" value="${esc(lot.date || '')}"></td>
+            <td><input type="number" id="pfEditShares" class="pf-input-mini" value="${lv.s}" min="0" step="any"></td>
+            <td><input type="number" id="pfEditPrice" class="pf-input-mini" value="${lv.p}" min="0" step="any"></td>
+            <td><input type="number" id="pfEditFee" class="pf-input-mini" value="${lv.fee}" min="0" step="any"></td>
+            <td id="pfEditNet">${fmtMoney(lv.netCost)}</td>
+            <td>${fmtPrice(r.price)}</td>
+            <td>${fmtMoney(lv.mv)}</td>
+            <td class="${pnlClass(lv.pnl)}">${fmtPnl(lv.pnl)}</td>
+            <td class="${pnlClass(lv.pct)}">${fmtPct(lv.pct)}</td>
+            <td><button class="pf-btn-mini" data-edit-save="${h.code}|${i}">保存</button><button class="pf-btn-mini" data-edit-cancel="1">取消</button></td>
+          </tr>`;
+          return;
+        }
         rows += `<tr class="pf-lot">
           <td></td><td></td>
           <td>${esc(lot.date || '—')}</td>
@@ -533,21 +573,112 @@
           <td>${fmtMoney(lv.netCost)}</td>
           <td>${fmtPrice(r.price)}</td>
           <td>${fmtMoney(lv.mv)}</td>
-          <td class="${pnlClass(lv.pnl)}">${lv.pnl == null ? '—' : (lv.pnl >= 0 ? '+' : '') + '¥' + lv.pnl.toFixed(2)}</td>
+          <td class="${pnlClass(lv.pnl)}">${fmtPnl(lv.pnl)}</td>
           <td class="${pnlClass(lv.pct)}">${fmtPct(lv.pct)}</td>
-          <td><button class="pf-btn-ghost" data-del-lot="${h.code}|${i}">删除</button></td>
+          <td><button class="pf-btn-mini" data-edit-lot="${h.code}|${i}">编辑</button><button class="pf-btn-mini pf-btn-mini-danger" data-del-lot="${h.code}|${i}">删除</button></td>
         </tr>`;
       });
     });
     tbody.innerHTML = rows;
+
+    // 展开 / 折叠某一 ETF 的建仓明细
+    tbody.querySelectorAll('[data-toggle-code]').forEach(tr => tr.addEventListener('click', e => {
+      if (e.target.closest('button')) return;
+      const code = tr.dataset.toggleCode;
+      if (EXPANDED.has(code)) EXPANDED.delete(code); else EXPANDED.add(code);
+      renderHoldingsTable();
+    }));
+
+    // 进入编辑
+    tbody.querySelectorAll('[data-edit-lot]').forEach(b => b.addEventListener('click', () => {
+      const [code, idx] = b.dataset.editLot.split('|');
+      const ex = HOLDINGS.find(h => h.code === code);
+      if (!ex) return;
+      const lot = computeRow(ex).lots[Number(idx)];
+      if (!lot) return;
+      EXPANDED.add(code);            // 编辑时强制展开, 避免编辑行被折叠隐藏
+      EDITING = { code, lot };
+      renderHoldingsTable();
+      const first = document.getElementById('pfEditShares');
+      if (first) first.focus();
+    }));
+
+    // 取消编辑
+    tbody.querySelectorAll('[data-edit-cancel]').forEach(b => b.addEventListener('click', () => {
+      EDITING = null; renderHoldingsTable();
+    }));
+
+    // 编辑态: 份额/单价变化时按当前费率自动重算手续费与投入(含费)
+    const syncEditPreview = () => {
+      const sEl = document.getElementById('pfEditShares');
+      const pEl = document.getElementById('pfEditPrice');
+      const fEl = document.getElementById('pfEditFee');
+      const nEl = document.getElementById('pfEditNet');
+      if (!sEl || !pEl) return;
+      const s = parseFloat(sEl.value), p = parseFloat(pEl.value);
+      const amount = (isFinite(s) && isFinite(p)) ? s * p : 0;
+      if (fEl && !fEl.dataset.userEdited) {
+        fEl.value = amount > 0 ? calcFee(amount, currentFeeSettings()).toFixed(2) : '';
+      }
+      const fee = parseFloat(fEl ? fEl.value : '');
+      if (nEl) nEl.textContent = fmtMoney((isFinite(fee) && fee >= 0) ? amount + fee : amount);
+    };
+    ['pfEditShares', 'pfEditPrice'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('input', syncEditPreview);
+    });
+    const editFeeEl = document.getElementById('pfEditFee');
+    if (editFeeEl) editFeeEl.addEventListener('input', () => { editFeeEl.dataset.userEdited = '1'; syncEditPreview(); });
+
+    // 保存编辑
+    tbody.querySelectorAll('[data-edit-save]').forEach(b => b.addEventListener('click', () => {
+      const [code, idx] = b.dataset.editSave.split('|');
+      const ex = HOLDINGS.find(h => h.code === code);
+      if (!ex) return;
+      const lot = computeRow(ex).lots[Number(idx)];
+      if (!lot) return;
+      const dEl = document.getElementById('pfEditDate');
+      const sEl = document.getElementById('pfEditShares');
+      const pEl = document.getElementById('pfEditPrice');
+      const fEl = document.getElementById('pfEditFee');
+      const shares = parseFloat(sEl.value);
+      const price = parseFloat(pEl.value);
+      if (!(shares > 0) || !(price > 0)) { toast('请填写有效的份额 / 买入单价', true); return; }
+      let fee = parseFloat(fEl.value);
+      if (!isFinite(fee) || fee < 0) fee = calcFee(shares * price, currentFeeSettings());
+      const realIdx = ex.lots.indexOf(lot);
+      if (realIdx < 0) return;
+      ex.lots[realIdx] = { date: dEl ? dEl.value : lot.date, shares: shares, price: price, fee: fee };
+      EDITING = null;
+      persistHoldings(); renderHoldingsTable();
+      toast('已保存该笔建仓记录');
+    }));
+
+    // 删除单笔 (入口已淡化, 另加二次确认)
     tbody.querySelectorAll('[data-del-lot]').forEach(b => b.addEventListener('click', () => {
       const [code, idx] = b.dataset.delLot.split('|');
       const ex = HOLDINGS.find(h => h.code === code);
-      if (ex) { ex.lots.splice(Number(idx), 1); if (!ex.lots.length) HOLDINGS = HOLDINGS.filter(h => h.code !== code); }
+      if (!ex) return;
+      const lot = computeRow(ex).lots[Number(idx)];
+      if (!lot) return;
+      if (!confirm('确定删除这笔建仓记录吗？\n\n' + (lot.date || '—') + ' · ' + lot.shares + ' 份 · 单价 ¥' + lot.price)) return;
+      const realIdx = ex.lots.indexOf(lot);
+      if (realIdx < 0) return;
+      ex.lots.splice(realIdx, 1);
+      if (EDITING && EDITING.lot === lot) EDITING = null;
+      if (!ex.lots.length) { HOLDINGS = HOLDINGS.filter(h => h.code !== code); EXPANDED.delete(code); }
       persistHoldings(); renderHoldingsTable();
     }));
-    tbody.querySelectorAll('[data-del-code]').forEach(b => b.addEventListener('click', () => {
-      HOLDINGS = HOLDINGS.filter(h => h.code !== b.dataset.delCode);
+
+    // 清仓 (二次确认)
+    tbody.querySelectorAll('[data-clear-code]').forEach(b => b.addEventListener('click', () => {
+      const code = b.dataset.clearCode;
+      const ex = HOLDINGS.find(h => h.code === code);
+      const n = ex ? ex.lots.length : 0;
+      if (!confirm('确定清空 ' + code.toUpperCase() + ' 的全部 ' + n + ' 笔持仓记录吗？此操作不可撤销。')) return;
+      HOLDINGS = HOLDINGS.filter(h => h.code !== code);
+      EXPANDED.delete(code);
+      if (EDITING && EDITING.code === code) EDITING = null;
       persistHoldings(); renderHoldingsTable();
     }));
 
@@ -577,6 +708,16 @@
 
   // 仅 Node 环境导出 (供单元测试, 浏览器中 module 未定义, 无副作用)
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { computeRow, computeSummary, lotValues, fmtPct, fmtMoney, fmtPrice, ALL_ETF, MARKET_OF, loadHoldings, setHoldings: function (h) { HOLDINGS = h; } };
+    module.exports = {
+      computeRow, computeSummary, lotValues, calcFee, currentFeeSettings,
+      fmtPct, fmtMoney, fmtPrice, fmtPnl, formatRatePct, formatRateWan,
+      FEE_DEFAULTS, ALL_ETF, MARKET_OF, loadHoldings, renderHoldingsTable,
+      setHoldings: function (h) { HOLDINGS = h; },
+      getHoldings: function () { return HOLDINGS; },
+      isExpanded: function (code) { return EXPANDED.has(code); },
+      expand: function (code) { EXPANDED.add(code); },
+      getEditing: function () { return EDITING; },
+      setEditing: function (v) { EDITING = v; }
+    };
   }
 })();
