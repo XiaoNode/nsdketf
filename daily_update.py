@@ -26,6 +26,10 @@ NDX_VALUATION_FILE = 'ndx_valuation.json'
 NDX_VALUATION_API = 'https://danjuanfunds.com/djapi/index/valuation/NDX'
 # History of Market 公开 JSON（TTM PE / Forward PE，每日更新，免登录）
 NDX_HOM_API = 'https://historyofmarket.com/api/ndx/forward-pe.json'
+# 集思录 QDII 数据接口（聚合各基金公司官方限购公告，精确"元/天"额度，需登录 cookie）
+JISILU_QDII_API = 'https://www.jisilu.cn/data/qdii/jisilu'
+# 东方财富基金档案（官方，免登录）：仅开放/暂停申购状态，作为无 cookie 时的兜底
+EM_FUND_ARCHIVE = 'https://fundf10.eastmoney.com/jjfl_{code}.html'
 
 
 def load_codes(json_file):
@@ -157,6 +161,153 @@ def fetch_price(code, days=DAILY_PRICE_DAYS):
         return parsed
 
     return request_with_retry(f'Price {code}', load_prices)
+
+
+def normalize_code(code):
+    """'sh513870' / 'sz159501' -> '513870' (6-digit fund/exchange code)."""
+    return code[2:] if code[:2] in ('sh', 'sz') else code
+
+
+def parse_jisilu_limit(raw):
+    """Normalize 集思录 ``limit`` field into a structured quota dict.
+
+    The field may be:
+    - a number (元/天), e.g. ``1000``
+    - ``None`` / ``''`` / ``0`` -> 不限购 (no limit)
+    - text such as ``'暂停'`` / ``'限大额'`` / ``'单日限购1000元'``
+    """
+    if raw is None or raw == '' or raw == 0:
+        return {'value': None, 'status': 'open', 'desc': '不限购'}
+    if isinstance(raw, str):
+        if '暂停' in raw:
+            return {'value': 0, 'status': 'suspended', 'desc': '暂停申购'}
+        if '不限' in raw or '无限制' in raw:
+            return {'value': None, 'status': 'open', 'desc': '不限购'}
+        m = re.search(r'(\d+(?:\.\d+)?)\s*万', raw)
+        if m:
+            return {'value': float(m.group(1)) * 10000, 'status': 'limit',
+                    'desc': raw.strip()}
+        m = re.search(r'(\d+(?:\.\d+)?)\s*元', raw)
+        if m:
+            return {'value': float(m.group(1)), 'status': 'limit', 'desc': raw.strip()}
+        try:
+            v = float(raw)
+            if v <= 0:
+                return {'value': None, 'status': 'open', 'desc': '不限购'}
+            return {'value': v, 'status': 'limit', 'desc': f'单日限购{v:g}元'}
+        except (ValueError, TypeError):
+            return {'value': None, 'status': 'unknown', 'desc': raw.strip()}
+    v = float(raw)
+    if v <= 0:
+        return {'value': None, 'status': 'open', 'desc': '不限购'}
+    return {'value': v, 'status': 'limit', 'desc': f'单日限购{v:g}元'}
+
+
+def fetch_jisilu_quotas():
+    """Fetch daily purchase quotas for all QDII ETFs from 集思录.
+
+    Requires the ``JISILU_COOKIE`` environment variable (logged-in session).
+    Returns a dict keyed by 6-digit code -> quota dict, or ``None`` when the
+    source is unavailable / cookie missing / expired.
+    """
+    cookie = os.environ.get('JISILU_COOKIE')
+    if not cookie:
+        return None
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://www.jisilu.cn/data/qdii/',
+        'Accept': 'application/json, text/javascript, */*; q=0.01',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Cookie': cookie,
+    }
+    ts = int(time.time() * 1000)
+    url = f'{JISILU_QDII_API}?___jsl=LST___t={ts}'
+
+    def load():
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            text = resp.read().decode('utf-8')
+        return text
+
+    try:
+        text = request_with_retry('Jisilu QDII', load)
+    except Exception as exc:
+        print(f'  [Quota] 集思录请求失败: {exc}')
+        return None
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        print('  [Quota] 集思录返回非 JSON（cookie 可能失效，返回 HTML 登录页）')
+        return None
+    rows = payload.get('rows') or []
+    result = {}
+    for row in rows:
+        fid = str(row.get('fund_id') or '').strip()
+        if not fid:
+            continue
+        quota = parse_jisilu_limit(row.get('limit'))
+        quota['source'] = 'jisilu'
+        result[fid[-6:]] = quota
+    return result
+
+
+def fetch_em_quota_status(code):
+    """East Money official fund archive: open / suspended status (no amount)."""
+    url = EM_FUND_ARCHIVE.format(code=normalize_code(code))
+
+    def load():
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.read().decode('utf-8', 'ignore')
+
+    try:
+        html = request_with_retry(f'EM archive {code}', load)
+    except Exception as exc:
+        print(f'  [Quota] 东方财富档案 {code} 失败: {exc}')
+        return None
+    m = re.search(r'交易状态[：:]\s*<span>([^<]+)</span>', html)
+    if not m:
+        return None
+    status_text = m.group(1).strip()
+    if '暂停' in status_text:
+        return {'value': 0, 'status': 'suspended', 'desc': '暂停申购',
+                'source': 'eastmoney'}
+    return {'value': None, 'status': 'open', 'desc': '开放申购',
+            'source': 'eastmoney'}
+
+
+def fetch_all_quotas(codes):
+    """Fetch daily purchaseable quota for every ETF code.
+
+    Primary source is 集思录 (exact 元/天, needs ``JISILU_COOKIE``).  When the
+    cookie is absent or a code is missing there, fall back to East Money's
+    official archive for an open/suspended status.  Returns a dict keyed by the
+    full code (``sh``/``sz`` prefix) -> quota dict with a ``date`` stamp.
+    """
+    today = datetime.now().strftime('%Y-%m-%d')
+    jisilu = fetch_jisilu_quotas()
+    if jisilu:
+        print(f'  [Quota] 集思录返回 {len(jisilu)} 条限购记录')
+    else:
+        print('  [Quota] 集思录不可用（未配置 JISILU_COOKIE 或已失效），回退东方财富档案')
+
+    result = {}
+    for code in codes:
+        c6 = normalize_code(code)
+        quota = None
+        if jisilu and c6 in jisilu:
+            quota = dict(jisilu[c6])
+        else:
+            em = fetch_em_quota_status(code)
+            if em:
+                quota = em
+        if quota:
+            quota['date'] = today
+            result[code] = quota
+        else:
+            result[code] = {'date': today, 'value': None, 'status': 'unknown',
+                            'desc': '—', 'source': 'none'}
+    return result
 
 
 def changed_data_months(before, after):
@@ -697,6 +848,13 @@ def main(argv=None):
         (prepare_update(load_codes('us50_all.json'), 'us50_all.json', args.full_nav), 'us50'),
         (prepare_update(load_codes('djia_all.json'), 'djia_all.json', args.full_nav), 'djia'),
     ]
+    # 每日可买额度（限购）：一次性拉取全部 ETF，写入各自 quota 字段
+    all_codes = [code for result, _ in results for code in result['codes']]
+    quota_map = fetch_all_quotas(all_codes)
+    for result, _ in results:
+        for code in result['codes']:
+            if code in quota_map and code in result['all_data']:
+                result['all_data'][code]['quota'] = quota_map[code]
     failures = [failure for result, _ in results for failure in result['failures']]
     if failures:
         print('\nUpdate aborted; no data files were written:')
