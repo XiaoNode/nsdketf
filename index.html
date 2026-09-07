@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<html lang="zh-CN" data-page-node-id="99nNNHlbZUfIBq43JRX68j">
+<head data-page-node-id="3tAjuin2g8Hc89udfy7fBG">
+<meta charset="UTF-8" data-page-node-id="cqnRc3kYQBabIkiLfpM1dw">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="V90PMfniPqdRu5YWDYCjfI">
 <title>纳斯达克100 QDII ETF 分析工具</title>
 <script src="https://cdn.staticfile.org/Chart.js/4.4.0/chart.umd.min.js"></script>
 <script src="https://cdn.staticfile.org/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js"></script>
@@ -111,33 +111,33 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
 .pf-lot-editing td{background:rgba(79,123,255,.06)}
 </style>
 </head>
-<body>
-<div class="header">
-  <div><h1>&#128202; 纳斯达克100 QDII ETF 分析</h1><div class="sub" id="idxSub">逐日数据 &#183; 价格/净值/折溢价/费率</div></div>
-  <div class="index-switch">
-  <button class="index-switch-btn active" data-idx="ndx">&#127912; 纳斯达克100</button>
-  <button class="index-switch-btn" data-idx="sp500">&#128200; 标普500</button>
-  <button class="index-switch-btn" data-idx="us50">&#127482;&#127480; 美国50</button>
-  <button class="index-switch-btn" data-idx="djia">&#127968;&#127482;&#127480; 道琼斯</button>
-  <button class="index-switch-btn" data-idx="holdings">&#128722; 我的持仓</button>
+<body data-page-node-id="8adpn2PqABfTZecmUmbufu">
+<div class="header" data-page-node-id="P5HYriUJGlwGjfAWSV88p3">
+  <div data-page-node-id="Q9ZNO90bJkIFFHE98WnSfa"><h1 data-page-node-id="0o7FEK3MxRNJHjQf6OMvzG">&#128202; 纳斯达克100 QDII ETF 分析</h1><div class="sub" id="idxSub" data-page-node-id="I7i6sYVaPUMXBtYAKibf5Z">逐日数据 &#183; 价格/净值/折溢价/费率</div></div>
+  <div class="index-switch" data-page-node-id="iZrcDPhVtkjs54SsLxGsrm">
+  <button class="index-switch-btn active" data-idx="ndx" data-page-node-id="X3YmDDJGAEmA8rBGaXSng5">&#127912; 纳斯达克100</button>
+  <button class="index-switch-btn" data-idx="sp500" data-page-node-id="GvDChEUsgvrR7cjMqvMrfY">&#128200; 标普500</button>
+  <button class="index-switch-btn" data-idx="us50" data-page-node-id="6ODnmqxU6KS3VrGWlyMha6">&#127482;&#127480; 美国50</button>
+  <button class="index-switch-btn" data-idx="djia" data-page-node-id="DONNxEzoEX1Ppqwve7MHRW">&#127968;&#127482;&#127480; 道琼斯</button>
+  <button class="index-switch-btn" data-idx="holdings" data-page-node-id="DWOHTHB6Tk2TBEjm8hyFgT">&#128722; 我的持仓</button>
 </div>
-  <div class="update-time" id="updateTime"></div>
+  <div class="update-time" id="updateTime" data-page-node-id="ebK9A0vOE05y5j32eKUOaI"></div>
 </div>
-<div class="container">
-  <div class="sidebar">
-    <div class="sidebar-title">选择基金（可多选对比）</div>
-    <div class="select-all-row"><input type="checkbox" id="chkAll"><label for="chkAll">全选 / 取消全选</label></div>
-    <div id="etfList"></div>
+<div class="container" data-page-node-id="TL9BWwhe82mq8Dj5ZQvB3U">
+  <div class="sidebar" data-page-node-id="yJjWWADMzOkdYMoD6Uz9gY">
+    <div class="sidebar-title" data-page-node-id="8S2l7BcwawaUslzexPcCql">选择基金（可多选对比）</div>
+    <div class="select-all-row" data-page-node-id="WBZdfesovPU1FZXLe3IocA"><input type="checkbox" id="chkAll" data-page-node-id="EaqmZxka7IqC6Aoj87kpVi"><label for="chkAll" data-page-node-id="OB1Ox6FWmTogXCd3vWt8Rs">全选 / 取消全选</label></div>
+    <div id="etfList" data-page-node-id="yYDnjS9isQBf3LFBFqQu75"></div>
   </div>
-  <div class="main">
-    <div class="tabs">
-      <div class="tab active" data-tab="price">&#128200; 价格走势</div>
-      <div class="tab" data-tab="premium">&#128260; 折溢价率</div>
-      <div class="tab" data-tab="nav">&#128176; 净值走势</div>
-      <div class="tab" data-tab="info">&#128203; 基金信息</div>
-      <div class="tab" data-tab="valuation" id="tabValuation">&#128202; 估值参考</div>
+  <div class="main" data-page-node-id="sn1TCH8xhf2XphsM2qHtDf">
+    <div class="tabs" data-page-node-id="rB36IDfEvkJ7JDuaJIPE9n">
+      <div class="tab active" data-tab="price" data-page-node-id="3tKSyCDWZjXGDLU8vCnLJ2">&#128200; 价格走势</div>
+      <div class="tab" data-tab="premium" data-page-node-id="ex62YFH5KasXwSwH7pO1XS">&#128260; 折溢价率</div>
+      <div class="tab" data-tab="nav" data-page-node-id="pRuMldUngJLVSeY5bxzEWQ">&#128176; 净值走势</div>
+      <div class="tab" data-tab="info" data-page-node-id="KwG1Rss0NQ6a7jzCpAWxWv">&#128203; 基金信息</div>
+      <div class="tab" data-tab="valuation" id="tabValuation" data-page-node-id="5vpvCly9bR5FcFxAw5ag9L">&#128202; 估值参考</div>
     </div>
-    <div class="chart-area" id="chartArea"></div>
+    <div class="chart-area" id="chartArea" data-page-node-id="KbLSEDbGgSmrSh4MGU43uo"></div>
   </div>
 </div>
 <script src="data/etf_data_2024-05.js"></script>
