@@ -37,11 +37,6 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang 
 .premium-pos{background:rgba(239,68,68,.15);color:#f87171}
 .premium-neg{background:rgba(34,197,94,.15);color:#4ade80}
 .premium-zero{background:rgba(136,146,164,.15);color:var(--text2)}
-.quota-badge{font-size:11px;padding:2px 6px;border-radius:4px;display:inline-block;font-weight:600;white-space:nowrap}
-.quota-limit{background:rgba(245,158,11,.15);color:#fbbf24}
-.quota-suspended{background:rgba(239,68,68,.18);color:#f87171}
-.quota-open{background:rgba(34,197,94,.15);color:#4ade80}
-.quota-unknown{color:var(--text2)}
 .extreme-high{background:rgba(239,68,68,.24);color:#fca5a5;border:1px solid rgba(239,68,68,.35);font-weight:700}
 .extreme-low{background:rgba(34,197,94,.22);color:#86efac;border:1px solid rgba(34,197,94,.35);font-weight:700}
 .rank-excluded{background:rgba(136,146,164,.12);color:var(--text2)}
@@ -397,31 +392,6 @@ function updateFreshness(){
 }
 function premiumClass(v){if(v===null)return'zero-val';if(v>0.5)return'pos-val';if(v<-0.5)return'neg-val';return'zero-val';}
 function premiumBadgeClass(v){if(v===null)return'premium-zero';if(v>0.5)return'premium-pos';if(v<-0.5)return'premium-neg';return'premium-zero';}
-function formatQuota(v){if(v==null)return'—';if(v>=10000)return(v/10000)+'万';return String(v);}
-function quotaHtml(code){
-  const etf=ETF_DATA_ACTIVE[code];const q=etf&&etf.quota;
-  if(!q)return'<span style="color:var(--text2)">—</span>';
-  if(q.status==='suspended')return'<span class="quota-badge quota-suspended">暂停</span>';
-  if(q.value&&q.value>0)return`<span class="quota-badge quota-limit">¥${formatQuota(q.value)}/天</span>`;
-  if(q.status==='open')return'<span class="quota-badge quota-open">开放</span>';
-  return'<span class="quota-badge quota-unknown">'+((q.desc&&q.desc!=='—')?q.desc:'—')+'</span>';
-}
-function quotaText(code){
-  const q=ETF_DATA_ACTIVE[code].quota;
-  if(!q)return'—';
-  if(q.status==='suspended')return'暂停申购';
-  if(q.value&&q.value>0)return'¥'+formatQuota(q.value)+'/天';
-  if(q.status==='open')return'开放申购';
-  return q.desc||'—';
-}
-function quotaColor(code){
-  const q=ETF_DATA_ACTIVE[code].quota;
-  if(!q)return'#8892a4';
-  if(q.status==='suspended')return'#f87171';
-  if(q.value&&q.value>0)return'#fbbf24';
-  if(q.status==='open')return'#4ade80';
-  return'#8892a4';
-}
 function feeColor(f){if(f<=0.60)return'#22c55e';if(f<=0.65)return'#84cc16';if(f<=0.80)return'#f59e0b';return'#ef4444';}
 
 function renderSidebar(){
@@ -448,7 +418,7 @@ function renderSidebar(){
         <div><div class="etf-name">${etf.name}</div><div class="etf-code">${code.toUpperCase()}</div></div>
       </div>
       ${priceHtml}
-      <div class="etf-tags"><span class="tag ${feeTag}">${etf.fee_total}%/年</span>${premHtml}${quotaHtml(code)}${excludedHtml}${extremeHtml}</div>`;
+      <div class="etf-tags"><span class="tag ${feeTag}">${etf.fee_total}%/年</span>${premHtml}${excludedHtml}${extremeHtml}</div>`;
     item.addEventListener('click',e=>{if(e.target.type==='checkbox')return;toggleSelect(code);});
     item.querySelector('input[type=checkbox]').addEventListener('change',e=>{
       if(e.target.checked)selectedCodes.add(code);else selectedCodes.delete(code);renderAll();
@@ -545,14 +515,14 @@ function renderPremiumTab(){
     const maxStr=maxP!=='-'?'+'+maxP+'%':'-';
     const minStr=minP!=='-'?minP+'%':'-';
     const navDate=premRecord?(premRecord.nav_date||premRecord.date):'-';
-    trs+=`<tr style="${bg}"><td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${COLORS[i%COLORS.length]};margin-right:6px"></span>${etf.name}</td><td class="${premiumClass(prem)}">${latestStr}</td><td>${quotaHtml(code)}</td><td>${navDate}</td><td>${avgStr}</td><td class="pos-val">${maxStr}</td><td class="neg-val">${minStr}</td></tr>`;
+    trs+=`<tr style="${bg}"><td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${COLORS[i%COLORS.length]};margin-right:6px"></span>${etf.name}</td><td class="${premiumClass(prem)}">${latestStr}</td><td>${navDate}</td><td>${avgStr}</td><td class="pos-val">${maxStr}</td><td class="neg-val">${minStr}</td></tr>`;
   });
   document.getElementById('chartArea').innerHTML=
     renderRangeBtns(currentRange)+
     '<div class="alert-warn"><span>&#9888;</span>溢价 &gt; 1% 时慎买，折价 &lt; -1% 时为买入机会。QDII ETF因额度限制有时长期处于溢价。</div>'+
     '<div class="chart-card"><h3>折溢价率走势</h3><div class="chart-desc">溢价率 = (市价 - 净值) / 净值 &#215; 100%，正值=溢价，负值=折价</div><div class="chart-wrapper"><canvas id="chartPremium"></canvas></div></div>'+
     '<div class="chart-card"><h3>折溢价统计对比（'+(currentRange==='3m'?'近3个月':currentRange==='6m'?'近6个月':currentRange==='1y'?'近1年':'全部')+'）</h3><div class="chart-desc">最新值 / 均值 / 最高最低</div>'+
-    '<table class="premium-table"><thead><tr><th>基金</th><th>最新溢价率</th><th>可买额度</th><th>使用净值日期</th><th>区间均值</th><th>区间最高</th><th>区间最低</th></tr></thead><tbody>'+trs+'</tbody></table></div>';
+    '<table class="premium-table"><thead><tr><th>基金</th><th>最新溢价率</th><th>使用净值日期</th><th>区间均值</th><th>区间最高</th><th>区间最低</th></tr></thead><tbody>'+trs+'</tbody></table></div>';
   bindRangeBtns();
   const {allDates,datasets}=buildDatasets('premium');
   makeLineChart('chartPremium',allDates,datasets,v=>v!=null?v.toFixed(3)+'%':'-');
@@ -597,7 +567,7 @@ function renderInfoTab(){
     const borderStyle=isSel?'border-color:'+color+'55':'';
     const priceHtml=price?`<div style="font-size:15px;font-weight:700;color:#fff">&#165;${price.toFixed(3)}</div>`:'';
     const premHtml=prem!==null?`<div class="${premiumBadgeClass(prem)} etf-premium-badge">${prem>0?'+':''}${prem.toFixed(2)}%</div>`:'';
-    return`<div class="info-card" style="${borderStyle}"><div class="card-header"><div><div class="card-name" style="color:${color}">${etf.name}</div><div class="card-code">${code.toUpperCase()} &#183; ${INDEX_TAGS[currentIndex]}</div></div><div style="text-align:right">${priceHtml}${premHtml}</div></div><div class="metric"><span class="metric-label">规模（亿元）</span><span class="metric-value" style="color:#fbbf24">${etf.size}</span></div><div class="metric"><span class="metric-label">综合费率</span><span class="metric-value" style="color:${feeColor(etf.fee_total)}">${etf.fee_total}%/年</span></div><div class="metric"><span class="metric-label">管理费</span><span class="metric-value">${etf.fee_mgmt}%</span></div><div class="metric"><span class="metric-label">托管费</span><span class="metric-value">${etf.fee_cust}%</span></div><div class="metric"><span class="metric-label">销售服务费</span><span class="metric-value">${etf.fee_svc}%</span></div><div class="metric"><span class="metric-label">每日可买额度</span><span class="metric-value" style="color:${quotaColor(code)}">${quotaText(code)}</span></div><div class="fee-bar"><div class="fee-fill" style="width:${feeW}%;background:${feeColor(etf.fee_total)}"></div></div></div>`;
+    return`<div class="info-card" style="${borderStyle}"><div class="card-header"><div><div class="card-name" style="color:${color}">${etf.name}</div><div class="card-code">${code.toUpperCase()} &#183; ${INDEX_TAGS[currentIndex]}</div></div><div style="text-align:right">${priceHtml}${premHtml}</div></div><div class="metric"><span class="metric-label">规模（亿元）</span><span class="metric-value" style="color:#fbbf24">${etf.size}</span></div><div class="metric"><span class="metric-label">综合费率</span><span class="metric-value" style="color:${feeColor(etf.fee_total)}">${etf.fee_total}%/年</span></div><div class="metric"><span class="metric-label">管理费</span><span class="metric-value">${etf.fee_mgmt}%</span></div><div class="metric"><span class="metric-label">托管费</span><span class="metric-value">${etf.fee_cust}%</span></div><div class="metric"><span class="metric-label">销售服务费</span><span class="metric-value">${etf.fee_svc}%</span></div><div class="fee-bar"><div class="fee-fill" style="width:${feeW}%;background:${feeColor(etf.fee_total)}"></div></div></div>`;
   }).join('');
   document.getElementById('chartArea').innerHTML=
     '<div class="alert-info" style="margin-bottom:16px"><span>&#128161;</span>费率进度条越长=费率越高。溢价徽章：红=溢价，绿=折价。</div>'+

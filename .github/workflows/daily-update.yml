@@ -44,7 +44,6 @@ jobs:
         run: python daily_update.py
         env:
           TZ: Asia/Shanghai  # 确保日期计算使用北京时间
-          JISILU_COOKIE: ${{ secrets.JISILU_COOKIE }}  # 可选：集思录登录 cookie，获取精确"元/天"限购额度；未配置则回退东方财富档案(仅开放/暂停)
 
       - name: Record update timestamp
         run: |
