@@ -72,7 +72,7 @@ def fetch_nav(code, days=DAILY_NAV_DAYS, start_date=None):
     With start_date, all pages back to that date are fetched. Otherwise only
     the most recent ``days`` source records are requested.
     """
-    pure_code = code[2:]
+    pure_code = code[2:] if re.match(r'^(?:sh|sz|of)\d{6}$', code) else code
     # Eastmoney silently caps this endpoint at 20 records per page even when
     # a larger pageSize is requested.
     page_size = 20
@@ -367,6 +367,98 @@ def write_text_atomic(path, content):
         raise
 
 
+def merge_otc_data(info, navs, replace_all_nav=False):
+    """Merge an over-the-counter fund's published NAV without inventing price/premium."""
+    updated = dict(info)
+    if replace_all_nav:
+        nav_dict = dict(navs)
+    else:
+        cutoff = min(navs)
+        nav_dict = {
+            item['date']: item['value']
+            for item in info.get('nav', [])
+            if item['date'] < cutoff
+        }
+        nav_dict.update(navs)
+    updated['nav'] = [
+        {'date': date, 'value': value}
+        for date, value in sorted(nav_dict.items())
+    ]
+    updated['price'] = []
+    updated['premium'] = []
+    return updated, changed_data_months(info, updated)
+
+
+def prepare_otc_update(codes, json_file, full_nav=False):
+    """Update OTC QDII NAVs; failures are isolated from exchange-traded ETF groups."""
+    json_path = os.path.join(DIR, json_file)
+    with open(json_path, 'r', encoding='utf-8') as f:
+        all_data = json.load(f)
+    original_all_data = copy.deepcopy(all_data)
+    failures = []
+    print(f'\n>>> Preparing {json_file} ({len(codes)} OTC funds)...')
+    for code in codes:
+        info = all_data.get(code)
+        if not info:
+            failures.append(f'{code}: missing metadata')
+            continue
+        print(f"  Processing {code} ({info['name']})...")
+        try:
+            source_code = info.get('source_code', code)
+            if full_nav:
+                start_date = min((item['date'] for item in info.get('nav', [])), default=None)
+                navs = fetch_nav(source_code, start_date=start_date)
+            else:
+                navs = fetch_nav(source_code)
+            updated, _ = merge_otc_data(info, navs, replace_all_nav=full_nav)
+            all_data[code] = updated
+        except Exception as exc:
+            failures.append(f'{code}: {exc}')
+    changed_months = changed_data_months_all(original_all_data, all_data)
+    return {
+        'codes': codes,
+        'json_file': json_file,
+        'all_data': all_data,
+        'changed_months': changed_months,
+        'failures': failures,
+    }
+
+
+def update_otc_quota_status(json_file):
+    """Refresh public Eastmoney quota/status text when available.
+
+    This endpoint is HTML, not a stable API; failure is intentionally non-fatal.
+    The page may reflect the selected sales channel, so the UI labels it as
+    "公开页面状态" rather than a universal all-channel quota.
+    """
+    json_path = os.path.join(DIR, json_file)
+    with open(json_path, 'r', encoding='utf-8') as f:
+        all_data = json.load(f)
+    checked_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for code, info in all_data.items():
+        try:
+            url = f'https://fund.eastmoney.com/{code}.html'
+            req = urllib.request.Request(url, headers=HEADERS)
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                html = resp.read().decode('utf-8', 'ignore')
+            match = re.search(r'交易状态：</span><span[^>]*>(.*?)</span>', html)
+            if not match:
+                raise ValueError('quota status not found')
+            status = re.sub(r'<[^>]+>', '', match.group(1))
+            status = re.sub(r'\s+', ' ', status).replace('&nbsp;', ' ').strip()
+            status = status.rstrip(' (')
+            if '单日累计购买上限' in status and not status.endswith(')'):
+                status += ')'
+            limit_match = re.search(r'单日累计购买上限\s*([0-9,.]+)元', status)
+            info['purchase_status'] = ' '.join(status.split())
+            info['purchase_limit'] = float(limit_match.group(1).replace(',', '')) if limit_match else None
+            info['purchase_checked_at'] = checked_at
+        except Exception as exc:
+            print(f'    [Warning] quota/status skipped for {code}: {exc}')
+    write_text_atomic(json_path, json.dumps(all_data, ensure_ascii=False))
+    return all_data
+
+
 def prepare_update(codes, json_file, full_nav=False):
     json_path = os.path.join(DIR, json_file)
     with open(json_path, 'r', encoding='utf-8') as f:
@@ -430,7 +522,7 @@ def write_update(result, prefix):
                         if item['date'].startswith(month)],
             }
 
-        if not any(subset[code]['price'] for code in subset):
+        if not any(subset[code].get('price') or subset[code].get('nav') for code in subset):
             continue
         js_path = os.path.join(DATA_DIR, f'{prefix}_data_{month}.js')
         if not os.path.exists(js_path):
@@ -691,6 +783,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     print(f"ETF Daily Update Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    try:
+        update_otc_quota_status('ndx_passive_all.json')
+    except Exception as exc:
+        print(f'\n[Warning] OTC quota update skipped: {exc}')
+
     results = [
         (prepare_update(load_codes('etf_all.json'), 'etf_all.json', args.full_nav), 'etf'),
         (prepare_update(load_codes('sp500_all.json'), 'sp500_all.json', args.full_nav), 'sp500'),
@@ -706,6 +803,18 @@ def main(argv=None):
 
     for result, prefix in results:
         write_update(result, prefix)
+
+    # 场外纳指被动基金独立更新：即使某个场外源失败，也不阻断四类 ETF 主流程
+    otc_result = prepare_otc_update(
+        load_codes('ndx_passive_all.json'),
+        'ndx_passive_all.json',
+        args.full_nav,
+    )
+    if otc_result['failures']:
+        for failure in otc_result['failures']:
+            print(f'  [Warning] OTC update failed: {failure}')
+    else:
+        write_update(otc_result, 'ndx_passive')
 
     # NDX 估值参考（蛋卷）：独立更新，失败不影响 ETF 主流程
     try:
