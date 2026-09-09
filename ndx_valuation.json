@@ -263,6 +263,17 @@
       "coverage_forward": 99.52,
       "date": "2026-09-08",
       "checked": "2026-09-09"
+    },
+    {
+      "pe": 28.23,
+      "forward_pe": 21.12,
+      "forward_pe_pct": 52.95,
+      "pe_history_date": "2026-09-09",
+      "forward_history_date": "2026-08-05",
+      "coverage_trailing": 92.4,
+      "coverage_forward": 99.5,
+      "date": "2026-09-09",
+      "checked": "2026-09-09"
     }
   ]
 }
