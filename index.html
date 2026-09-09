@@ -586,11 +586,15 @@ function passiveSortHeader(label,key){
   return `<th class="passive-sortable" data-passive-sort="${key}" title="点击排序">${label}<span class="passive-sort-icon">${active?(passiveSort.dir===1?'▲':'▼'):'↕'}</span></th>`;
 }
 function bindPassiveTable(){
-  document.querySelectorAll('[data-passive-sort]').forEach(th=>th.addEventListener('click',()=>{
-    const key=th.dataset.passiveSort;
-    passiveSort=passiveSort.key===key?{key,dir:-passiveSort.dir}:{key,dir:1};
-    renderNavTab();
-  }));
+  const table=document.querySelector('.passive-table');
+  if(!table)return;
+  table.querySelectorAll('th.passive-sortable').forEach(th=>{
+    th.addEventListener('click',()=>{
+      const key=th.dataset.passiveSort;
+      passiveSort=passiveSort.key===key?{key,dir:-passiveSort.dir}:{key,dir:1};
+      renderNavTab();
+    });
+  });
   const select=document.getElementById('passiveStatusFilter');
   if(select)select.addEventListener('change',e=>{passiveStatusFilter=e.target.value;renderNavTab();});
 }
@@ -633,6 +637,7 @@ function renderNavTab(){
   document.getElementById('chartArea').innerHTML=
     '<div class="alert-info"><span>&#128161;</span>场外基金不产生场内折溢价，本页改为一张总表展示净值、涨跌、费率、规模及申购额度；净值为基金公司公布的单位净值，通常存在披露滞后。</div>'+
     '<div class="chart-card"><div class="passive-toolbar"><div><h3>纳指被动 · 场外 QDII 基金总览</h3><div class="chart-desc">共 '+funds.length+' / '+ETF_CODES.length+' 只基金 · 点击表头可升序/降序排序</div></div><label class="passive-filter-label">申购状态<select id="passiveStatusFilter" class="passive-filter"><option value="all"'+(passiveStatusFilter==='all'?' selected':'')+'>全部</option><option value="available"'+(passiveStatusFilter==='available'?' selected':'')+'>可购</option><option value="paused"'+(passiveStatusFilter==='paused'?' selected':'')+'>暂停</option></select></label></div><div class="passive-table-wrap"><table class="passive-table"><thead><tr><th>基金名称 / 代码</th><th>最新净值</th><th>净值日期</th><th>日涨跌</th><th>规模</th>'+passiveSortHeader('综合费率','fee_total')+passiveSortHeader('管理费','fee_mgmt')+passiveSortHeader('托管费','fee_cust')+passiveSortHeader('申购状态','purchase_status')+passiveSortHeader('单日额度','purchase_limit')+'<th>额度检查时间</th></tr></thead><tbody>'+rows+'</tbody></table></div><div class="passive-source">当前筛选：'+statusLabel+'。数据说明：净值来自公开基金净值数据；申购状态/额度来自天天基金公开页面检查结果。不同销售渠道可能不同，实际申购请以基金公司或对应销售平台当日页面为准。</div></div>';
+  bindPassiveTable();
 }
 
 function renderInfoTab(){
