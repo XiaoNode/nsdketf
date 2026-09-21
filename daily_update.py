@@ -9,7 +9,7 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 DIR = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +26,29 @@ NDX_VALUATION_FILE = 'ndx_valuation.json'
 NDX_VALUATION_API = 'https://danjuanfunds.com/djapi/index/valuation/NDX'
 # History of Market 公开 JSON（TTM PE / Forward PE，每日更新，免登录）
 NDX_HOM_API = 'https://historyofmarket.com/api/ndx/forward-pe.json'
+# 天天基金移动端阶段涨幅接口（近1/2/3/5年收益率，含复权，免登录）
+FUND_PERIOD_API = 'https://fundmobapi.eastmoney.com/FundMNewApi/FundMNPeriodIncrease'
+# 天天基金 F10 特色数据页（指数基金年化跟踪误差 + 跟踪指数）
+FUND_TSDATA_URL = 'https://fundf10.eastmoney.com/tsdata_{code}.html'
+# 天天基金详情 JS（含完整复权净值序列，用于交叉校验区间涨幅）
+FUND_PINGZHONG_URL = 'https://fund.eastmoney.com/pingzhongdata/{code}.js'
+# 腾讯美股指数日线（用于交叉校验跟踪误差，免登录且稳定）
+US_INDEX_KLINE_API = 'https://web.ifzq.gtimg.cn/appstock/app/usfqkline/get'
+# 纳指被动基金跟踪的指数在腾讯行情里的代码
+TRACK_INDEX_KLINE_SYMBOL = 'usNDX'
+# 区间涨幅字段 -> (移动端 title, 自然年跨度)
+PERIOD_RETURN_FIELDS = (
+    ('ret_1y', '1N', 1),
+    ('ret_2y', '2N', 2),
+    ('ret_3y', '3N', 3),
+    ('ret_5y', '5N', 5),
+)
+# 涨幅交叉校验允许的最大偏差（百分点）。官方接口取复权收益，自算亦按复权序列，
+# 正常应完全吻合或仅因交易日对齐差零点几个百分点。
+PERIOD_RETURN_TOLERANCE = 1.5
+# 跟踪误差交叉校验允许的最大偏差（百分点）
+TRACKING_ERROR_TOLERANCE = 0.6
+TRACKING_DAYS_PER_YEAR = 252
 
 
 def load_codes(json_file):
@@ -459,6 +482,283 @@ def update_otc_quota_status(json_file):
     return all_data
 
 
+def fetch_fund_period_returns(code):
+    """Fetch trailing 1/2/3/5-year returns for an OTC fund.
+
+    Uses Eastmoney's mobile ``FundMNPeriodIncrease`` endpoint, which publishes
+    adjusted (复权) cumulative returns keyed by ``1N``/``2N``/``3N``/``5N``.
+    Periods shorter than the fund's history come back as an empty string and
+    are normalised to ``None`` so the UI can render them as N/A.
+    """
+    params = urllib.parse.urlencode({
+        'FCODE': code,
+        'deviceid': 'workbuddy',
+        'plat': 'Android',
+        'product': 'EFund',
+        'version': '6.2.8',
+    })
+    url = f'{FUND_PERIOD_API}?{params}'
+
+    def load():
+        req = urllib.request.Request(url, headers={**HEADERS, 'Referer': 'https://fund.eastmoney.com/'})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode('utf-8', 'ignore'))
+        if not payload.get('Success'):
+            raise ValueError(f"period API error: {payload.get('ErrMsg') or payload.get('ErrCode')}")
+        return payload
+
+    payload = request_with_retry(f'period returns {code}', load)
+    by_title = {item.get('title'): item.get('syl') for item in payload.get('Datas') or []}
+    result = {}
+    for field, title, _years in PERIOD_RETURN_FIELDS:
+        raw = by_title.get(title)
+        try:
+            result[field] = round(float(raw), 2) if raw not in (None, '', '--') else None
+        except (TypeError, ValueError):
+            result[field] = None
+    expansion = payload.get('Expansion') or {}
+    result['perf_asof'] = expansion.get('TIME') or None
+    result['established'] = expansion.get('ESTABDATE') or None
+    return result
+
+
+def fetch_fund_tracking_error(code):
+    """Fetch the annualised tracking error and tracked index from F10 page.
+
+    Eastmoney's ``tsdata`` page publishes ``年化跟踪误差`` under the
+    "指数基金指标" section.  The page is HTML rather than a stable API, so a
+    parse failure is treated as "no data" by the caller.
+    """
+    url = FUND_TSDATA_URL.format(code=code)
+
+    def load():
+        req = urllib.request.Request(url, headers={**HEADERS, 'Referer': 'https://fund.eastmoney.com/'})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return resp.read().decode('utf-8', 'ignore')
+
+    html = request_with_retry(f'tracking error {code}', load)
+    section = html[html.find('指数基金指标'):]
+    if not section:
+        raise ValueError('指数基金指标 section not found')
+    match = re.search(
+        r'<td\s*>([^<]+)</td>\s*<td\s*>([\d.]+)%</td>\s*<td\s*>([\d.]+)%</td>',
+        section[:3000],
+    )
+    if not match:
+        raise ValueError('tracking error rows not found')
+    asof_match = re.search(r'截止至：([\d-]+)', section[:3000])
+    return {
+        'track_index': match.group(1).strip(),
+        'track_err': round(float(match.group(2)), 2),
+        'peer_track_err': round(float(match.group(3)), 2),
+        'track_err_asof': asof_match.group(1) if asof_match else None,
+    }
+
+
+def fetch_fund_adjusted_nav_series(code):
+    """Return ``(raw, adjusted)`` date->value series for a fund.
+
+    ``Data_netWorthTrend`` gives the published unit NAV (``y``) plus the day's
+    adjusted return (``equityReturn``).  Cumulative-multiplying the returns
+    reconstructs an adjusted series that is comparable with the official
+    period returns for funds that paid dividends (dividends show up as a
+    ``unitMoney`` adjustment and a ``0`` equityReturn that day).
+
+    Two bases are returned because either may be the correct comparison
+    depending on the fund: a non-distributing fund's raw NAV matches the
+    published returns exactly, while a distributing fund needs the adjusted
+    series.  Cross-checks accept a match on either basis.
+    """
+    url = f'{FUND_PINGZHONG_URL.format(code=code)}'
+
+    def load():
+        req = urllib.request.Request(url, headers={**HEADERS, 'Referer': 'https://fund.eastmoney.com/'})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return resp.read().decode('utf-8', 'ignore')
+
+    text = request_with_retry(f'nav series {code}', load)
+    match = re.search(r'var\s+Data_netWorthTrend\s*=\s*(\[.*?\]);', text)
+    if not match:
+        raise ValueError('Data_netWorthTrend not found')
+    records = json.loads(match.group(1))
+    raw = {}
+    adjusted = {}
+    cumulative = 1.0
+    tz = timezone(timedelta(hours=8))
+    for item in records:
+        stamp = item.get('x')
+        if stamp is None:
+            continue
+        date = datetime.fromtimestamp(int(stamp) / 1000, tz).strftime('%Y-%m-%d')
+        try:
+            raw[date] = float(item['y'])
+        except (KeyError, TypeError, ValueError):
+            continue
+        equity_return = item.get('equityReturn')
+        if equity_return is not None:
+            try:
+                cumulative *= 1 + float(equity_return) / 100
+            except (TypeError, ValueError):
+                pass
+        adjusted[date] = cumulative
+    if len(raw) < 260:
+        raise ValueError(f'nav history too short ({len(raw)} rows)')
+    return raw, adjusted
+
+
+def compute_period_return(series, years):
+    """Compute a trailing return (%) from a date->value series."""
+    end_date = max(series)
+    start_date = (
+        datetime.strptime(end_date, '%Y-%m-%d') - timedelta(days=365 * years)
+    ).strftime('%Y-%m-%d')
+    prior = [date for date in series if date <= start_date]
+    if not prior:
+        return None
+    base = series[max(prior)]
+    if not base:
+        return None
+    return round((series[end_date] / base - 1) * 100, 2)
+
+
+def fetch_us_index_closes(symbol=TRACK_INDEX_KLINE_SYMBOL, count=1200):
+    """Fetch daily closes for a US index from Tencent (used to verify TE)."""
+    params = urllib.parse.urlencode({'param': f'{symbol},day,,,{count},qfq'})
+    url = f'{US_INDEX_KLINE_API}?{params}'
+
+    def load():
+        req = urllib.request.Request(url, headers={**HEADERS, 'Referer': 'https://gu.qq.com/'})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode('utf-8', 'ignore'))
+        rows = (payload.get('data') or {}).get(symbol) or {}
+        klines = rows.get('qfqday') or rows.get('day') or []
+        if not klines:
+            raise ValueError('index kline empty')
+        return {row[0]: float(row[2]) for row in klines}
+
+    return request_with_retry(f'index kline {symbol}', load)
+
+
+def compute_tracking_error(fund_series, index_closes, years=1):
+    """Annualised tracking error from daily fund-vs-index return differences."""
+    end_date = max(fund_series)
+    start_date = (
+        datetime.strptime(end_date, '%Y-%m-%d') - timedelta(days=365 * years)
+    ).strftime('%Y-%m-%d')
+    common = sorted(
+        date for date in fund_series if date >= start_date and date in index_closes
+    )
+    if len(common) < 60:
+        return None
+    diffs = []
+    for previous, current in zip(common, common[1:]):
+        fund_return = fund_series[current] / fund_series[previous] - 1
+        index_return = index_closes[current] / index_closes[previous] - 1
+        diffs.append(fund_return - index_return)
+    mean = sum(diffs) / len(diffs)
+    variance = sum((value - mean) ** 2 for value in diffs) / (len(diffs) - 1)
+    return round(math.sqrt(variance) * math.sqrt(TRACKING_DAYS_PER_YEAR) * 100, 2)
+
+
+def update_ndx_passive_performance(json_file='ndx_passive_all.json'):
+    """Attach trailing returns and tracking error to each OTC passive fund.
+
+    Every field is sourced from a public Eastmoney endpoint and then
+    independently recomputed from raw NAV / index series where possible.  A
+    mismatch is reported as a warning but never overwrites the published
+    figure, so the stored value always reflects the fund company's own data.
+
+    Returns ``(all_data, changed)`` where ``changed`` indicates whether any
+    persisted field differs from what was on disk.  Callers should refresh the
+    monthly JS when ``changed`` is true, otherwise a day with no NAV movement
+    would leave the published performance stale.
+    """
+    json_path = os.path.join(DIR, json_file)
+    with open(json_path, 'r', encoding='utf-8') as f:
+        all_data = json.load(f)
+    original = copy.deepcopy(all_data)
+
+    index_closes = None
+    try:
+        index_closes = fetch_us_index_closes()
+        print(f'  [Perf] NDX index history: {len(index_closes)} rows')
+    except Exception as exc:
+        print(f'  [Warning] index history unavailable, TE cross-check skipped: {exc}')
+
+    perf_fields = [field for field, _t, _y in PERIOD_RETURN_FIELDS] + [
+        'track_index', 'track_err', 'peer_track_err', 'track_err_asof',
+        'perf_asof', 'established',
+    ]
+    for code, info in all_data.items():
+        print(f"  [Perf] {code} ({info.get('name')})...")
+        try:
+            returns = fetch_fund_period_returns(code)
+            info.update({field: returns[field] for field, _t, _y in PERIOD_RETURN_FIELDS})
+            info['perf_asof'] = returns['perf_asof']
+            info['established'] = returns['established'] or info.get('established')
+        except Exception as exc:
+            print(f'    [Warning] period returns skipped for {code}: {exc}')
+
+        try:
+            tracking = fetch_fund_tracking_error(code)
+            info.update(tracking)
+        except Exception as exc:
+            print(f'    [Warning] tracking error skipped for {code}: {exc}')
+
+        # --- 交叉校验：用净值序列自算区间涨幅（原始/复权两种基准取其一命中即可）---
+        raw_series = adjusted_series = None
+        try:
+            raw_series, adjusted_series = fetch_fund_adjusted_nav_series(code)
+            for field, _title, years in PERIOD_RETURN_FIELDS:
+                official = info.get(field)
+                if official is None:
+                    continue
+                computed = [
+                    value for value in (
+                        compute_period_return(raw_series, years),
+                        compute_period_return(adjusted_series, years),
+                    ) if value is not None
+                ]
+                if not computed:
+                    continue
+                if all(abs(official - value) > PERIOD_RETURN_TOLERANCE for value in computed):
+                    print(f'    [Warning] {code} {field}: official {official} '
+                          f'vs computed (raw {computed[0]} / adj {computed[-1]})')
+        except Exception as exc:
+            print(f'    [Warning] period cross-check skipped for {code}: {exc}')
+
+        # --- 交叉校验：用指数日线自算跟踪误差（原始/复权两种基准取其一命中即可）---
+        if raw_series is not None and index_closes:
+            try:
+                official_te = info.get('track_err')
+                track_index = info.get('track_index') or ''
+                # 跟踪非纳指100的基金（如科技市值加权）无法用 NDX 校验
+                if official_te is not None and '纳斯达克100' in track_index:
+                    computed = [
+                        value for value in (
+                            compute_tracking_error(raw_series, index_closes, years=1),
+                            compute_tracking_error(adjusted_series, index_closes, years=1),
+                        ) if value is not None
+                    ]
+                    if computed and all(
+                        abs(official_te - value) > TRACKING_ERROR_TOLERANCE
+                        for value in computed
+                    ):
+                        print(f'    [Warning] {code} track_err: official {official_te} '
+                              f'vs computed (raw {computed[0]} / adj {computed[-1]})')
+            except Exception as exc:
+                print(f'    [Warning] TE cross-check skipped for {code}: {exc}')
+
+    changed = any(
+        all_data[code].get(field) != original[code].get(field)
+        for code in all_data
+        for field in perf_fields
+    )
+    write_text_atomic(json_path, json.dumps(all_data, ensure_ascii=False))
+    print(f'  [Perf] Wrote {json_file} (changed={changed})')
+    return all_data, changed
+
+
 def prepare_update(codes, json_file, full_nav=False):
     json_path = os.path.join(DIR, json_file)
     with open(json_path, 'r', encoding='utf-8') as f:
@@ -814,6 +1114,23 @@ def main(argv=None):
         for failure in otc_result['failures']:
             print(f'  [Warning] OTC update failed: {failure}')
     else:
+        # 阶段涨幅 / 跟踪误差需在写月度文件前回填，否则界面要到下一轮才生效
+        try:
+            enriched, perf_changed = update_ndx_passive_performance('ndx_passive_all.json')
+            otc_result['all_data'] = enriched
+            if perf_changed:
+                # 即使净值无变化（changed_months 为空），绩效字段也需刷新月度文件，
+                # 否则界面仍显示上一轮的涨幅/跟踪误差。
+                months = {
+                    item['date'][:7]
+                    for info in enriched.values()
+                    for item in info.get('nav', [])
+                    if is_valid_date(item.get('date'))
+                }
+                if months:
+                    otc_result['changed_months'] = set(otc_result['changed_months']) | {max(months)}
+        except Exception as exc:
+            print(f'\n[Warning] OTC performance update skipped: {exc}')
         write_update(otc_result, 'ndx_passive')
 
     # NDX 估值参考（蛋卷）：独立更新，失败不影响 ETF 主流程
