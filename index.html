@@ -79,7 +79,7 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
 .premium-table td{padding:7px 12px;border-bottom:1px solid rgba(255,255,255,.04)}
 .premium-table tr:hover td{background:rgba(255,255,255,.02)}
 .passive-table-wrap{overflow-x:auto}
-.passive-table{width:100%;min-width:1180px;border-collapse:collapse;font-size:12px}
+.passive-table{width:100%;min-width:1660px;border-collapse:collapse;font-size:12px}
 .passive-table th{background:var(--surface2);color:var(--text2);padding:10px 12px;text-align:left;font-weight:600;white-space:nowrap;position:sticky;top:0;z-index:1}
 .passive-table th.passive-sortable{cursor:pointer;user-select:none}
 .passive-table th.passive-sortable:hover{color:var(--accent);background:rgba(79,123,255,.12)}
@@ -99,7 +99,7 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
 .passive-filter-label{display:flex;align-items:center;gap:8px;color:var(--text2);font-size:12px;white-space:nowrap}
 .passive-filter{padding:7px 28px 7px 10px;border-radius:7px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;cursor:pointer}
 @media(max-width:700px){.passive-toolbar{align-items:stretch;flex-direction:column}.passive-filter-label{justify-content:space-between}.passive-filter{flex:1}}
-@media(max-width:900px){.passive-table{min-width:1080px}.chart-area{padding:12px}.chart-card{padding:14px}}
+@media(max-width:900px){.passive-table{min-width:1560px}.chart-area{padding:12px}.chart-card{padding:14px}}
 .pos-val{color:var(--red)}
 .neg-val{color:var(--green)}
 .zero-val{color:var(--text2)}
@@ -323,6 +323,13 @@ function mergeMonthly(months) {
           nav: [...(src.nav || [])]
         };
       } else {
+        // 标量元数据以最新月份为准：申购状态/额度/规模/费率/阶段涨幅等随时会更新，
+        // 若只保留最早月份的取值会导致界面显示过时信息（例如已恢复申购仍显示“暂停申购”）。
+        // 仅在新月份确实带该字段时覆盖，避免较早月份独有的字段被清空。
+        Object.keys(src).forEach(key => {
+          if (key === 'price' || key === 'premium' || key === 'nav') return;
+          if (src[key] !== undefined) merged[code][key] = src[key];
+        });
         merged[code].price = merged[code].price.concat(src.price || []);
         merged[code].premium = merged[code].premium.concat(src.premium || []);
         merged[code].nav = merged[code].nav.concat(src.nav || []);
@@ -579,6 +586,8 @@ function passiveSortValue(etf,key){
   if(key==='fee_total'||key==='fee_mgmt'||key==='fee_cust')return Number(etf[key]);
   if(key==='purchase_limit')return etf.purchase_limit==null?Infinity:Number(etf.purchase_limit);
   if(key==='purchase_status')return /暂停/.test(etf.purchase_status||'')?1:0;
+  if(key==='ret_1y'||key==='ret_2y'||key==='ret_3y'||key==='ret_5y')return etf[key]==null?-Infinity:Number(etf[key]);
+  if(key==='track_err')return etf.track_err==null?Infinity:Number(etf.track_err);
   return 0;
 }
 function passiveSortHeader(label,key){
@@ -620,11 +629,27 @@ function renderNavTab(){
     const paused=/暂停/.test(status);
     const limit=etf.purchase_limit===null||etf.purchase_limit===undefined?'—':('¥'+Number(etf.purchase_limit).toFixed(2));
     const share=etf.share_code?`<div class="passive-code">C类：${etf.share_code}</div>`:'';
+    const retCell=key=>{
+      const v=etf[key];
+      if(v===null||v===undefined)return '<td class="passive-muted">N/A</td>';
+      const n=Number(v);
+      return '<td class="'+(n>=0?'pos-val':'neg-val')+'">'+(n>=0?'+':'')+n.toFixed(2)+'%</td>';
+    };
+    const teVal=etf.track_err;
+    const trackIndex=etf.track_index||'';
+    const teCell=teVal===null||teVal===undefined
+      ?'<td class="passive-muted">N/A</td>'
+      :'<td title="'+(trackIndex?('跟踪指数：'+trackIndex):'')+'">'+Number(teVal).toFixed(2)+'%<div class="passive-code">'+(trackIndex?trackIndex.replace('纳斯达克100指数','纳指100').replace('纳斯达克科技市值加权指数','纳指科技'):'—')+'</div></td>';
     return `<tr>
       <td><div class="passive-name"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>${etf.name}</div><div class="passive-code">A类：${code}</div>${share}</td>
       <td class="passive-nav">${latest?Number(latest.value).toFixed(4):'—'}</td>
       <td>${latest?latest.date:'—'}</td>
       <td class="${dailyChange===null?'passive-muted':dailyChange>=0?'pos-val':'neg-val'}">${dailyChange===null?'—':(dailyChange>=0?'+':'')+dailyChange.toFixed(2)+'%'}</td>
+      ${retCell('ret_1y')}
+      ${retCell('ret_2y')}
+      ${retCell('ret_3y')}
+      ${retCell('ret_5y')}
+      ${teCell}
       <td>${etf.size==null?'—':Number(etf.size).toFixed(2)+' 亿'}</td>
       <td class="passive-fee">${Number(etf.fee_total).toFixed(2)}%</td>
       <td>${Number(etf.fee_mgmt).toFixed(2)}%</td>
@@ -635,8 +660,8 @@ function renderNavTab(){
     </tr>`;
   }).join('');
   document.getElementById('chartArea').innerHTML=
-    '<div class="alert-info"><span>&#128161;</span>场外基金不产生场内折溢价，本页改为一张总表展示净值、涨跌、费率、规模及申购额度；净值为基金公司公布的单位净值，通常存在披露滞后。</div>'+
-    '<div class="chart-card"><div class="passive-toolbar"><div><h3>纳指被动 · 场外 QDII 基金总览</h3><div class="chart-desc">共 '+funds.length+' / '+ETF_CODES.length+' 只基金 · 点击表头可升序/降序排序</div></div><label class="passive-filter-label">申购状态<select id="passiveStatusFilter" class="passive-filter"><option value="all"'+(passiveStatusFilter==='all'?' selected':'')+'>全部</option><option value="available"'+(passiveStatusFilter==='available'?' selected':'')+'>可购</option><option value="paused"'+(passiveStatusFilter==='paused'?' selected':'')+'>暂停</option></select></label></div><div class="passive-table-wrap"><table class="passive-table"><thead><tr><th>基金名称 / 代码</th><th>最新净值</th><th>净值日期</th><th>日涨跌</th><th>规模</th>'+passiveSortHeader('综合费率','fee_total')+passiveSortHeader('管理费','fee_mgmt')+passiveSortHeader('托管费','fee_cust')+passiveSortHeader('申购状态','purchase_status')+passiveSortHeader('单日额度','purchase_limit')+'<th>额度检查时间</th></tr></thead><tbody>'+rows+'</tbody></table></div><div class="passive-source">当前筛选：'+statusLabel+'。数据说明：净值来自公开基金净值数据；申购状态/额度来自天天基金公开页面检查结果。不同销售渠道可能不同，实际申购请以基金公司或对应销售平台当日页面为准。</div></div>';
+    '<div class="alert-info"><span>&#128161;</span>场外基金不产生场内折溢价，本页改为一张总表展示净值、区间涨幅、跟踪误差、费率、规模及申购额度；净值为基金公司公布的单位净值，通常存在披露滞后。</div>'+
+    '<div class="chart-card"><div class="passive-toolbar"><div><h3>纳指被动 · 场外 QDII 基金总览</h3><div class="chart-desc">共 '+funds.length+' / '+ETF_CODES.length+' 只基金 · 点击表头可升序/降序排序 · 涨幅为该基金区间复权收益，跟踪误差越小代表越贴近标的指数</div></div><label class="passive-filter-label">申购状态<select id="passiveStatusFilter" class="passive-filter"><option value="all"'+(passiveStatusFilter==='all'?' selected':'')+'>全部</option><option value="available"'+(passiveStatusFilter==='available'?' selected':'')+'>可购</option><option value="paused"'+(passiveStatusFilter==='paused'?' selected':'')+'>暂停</option></select></label></div><div class="passive-table-wrap"><table class="passive-table"><thead><tr><th>基金名称 / 代码</th><th>最新净值</th><th>净值日期</th><th>日涨跌</th>'+passiveSortHeader('近1年','ret_1y')+passiveSortHeader('近2年','ret_2y')+passiveSortHeader('近3年','ret_3y')+passiveSortHeader('近5年','ret_5y')+passiveSortHeader('跟踪误差','track_err')+'<th>规模</th>'+passiveSortHeader('综合费率','fee_total')+passiveSortHeader('管理费','fee_mgmt')+passiveSortHeader('托管费','fee_cust')+passiveSortHeader('申购状态','purchase_status')+passiveSortHeader('单日额度','purchase_limit')+'<th>额度检查时间</th></tr></thead><tbody>'+rows+'</tbody></table></div><div class="passive-source">当前筛选：'+statusLabel+'。数据说明：净值与阶段涨幅来自公开基金数据（涨幅为区间复权收益）；跟踪误差为基金相对标的指数的年化跟踪偏离度标准差，越小越贴近指数；申购状态/额度来自天天基金公开页面检查结果，不同销售渠道可能不同，实际申购请以基金公司或对应销售平台当日页面为准。</div></div>';
   bindPassiveTable();
 }
 
