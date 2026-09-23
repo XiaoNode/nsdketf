@@ -57,6 +57,17 @@ jobs:
       - name: Validate generated data
         run: python -m unittest discover -s tests -v
 
+      - name: Reserve daily low-premium email
+        id: alert
+        run: python premium_alert.py prepare
+        env:
+          ALERT_TO_EMAIL: ${{ secrets.ALERT_TO_EMAIL }}
+          ALERT_SMTP_HOST: ${{ secrets.ALERT_SMTP_HOST }}
+          ALERT_SMTP_USER: ${{ secrets.ALERT_SMTP_USER }}
+          ALERT_SMTP_PASSWORD: ${{ secrets.ALERT_SMTP_PASSWORD }}
+          ALERT_SMTP_PORT: ${{ vars.ALERT_SMTP_PORT }}
+          TZ: Asia/Shanghai
+
       - name: Check for changes
         id: verify
         run: |
@@ -75,6 +86,37 @@ jobs:
           git commit -m "chore: auto-update ETF data [$(date +'%Y-%m-%d %Z')]"
           git push
 
+      # 在 SMTP 之前持久化一次发送尝试：失败不重试，以严格保证同日不发第二封。
+      - name: Claim low-premium email attempt
+        if: steps.alert.outputs.send == 'true' && steps.verify.outputs.changed == 'true'
+        id: claim_alert
+        run: python premium_alert.py claim
+        env:
+          ALERT_TO_EMAIL: ${{ secrets.ALERT_TO_EMAIL }}
+          ALERT_SMTP_HOST: ${{ secrets.ALERT_SMTP_HOST }}
+          ALERT_SMTP_USER: ${{ secrets.ALERT_SMTP_USER }}
+          ALERT_SMTP_PASSWORD: ${{ secrets.ALERT_SMTP_PASSWORD }}
+          ALERT_SMTP_PORT: ${{ vars.ALERT_SMTP_PORT }}
+
+      - name: Persist alert attempt
+        if: steps.claim_alert.outputs.send == 'true'
+        run: |
+          git add .github/premium-alert-state.json
+          git commit -m "chore: record ETF email alert attempt"
+          git push
+
+      - name: Send low-premium email
+        if: steps.claim_alert.outputs.send == 'true'
+        continue-on-error: true  # 邮件服务故障不阻断当日数据部署；发送标记已落盘，不自动重试
+        run: python premium_alert.py send
+        env:
+          ALERT_TO_EMAIL: ${{ secrets.ALERT_TO_EMAIL }}
+          ALERT_SMTP_HOST: ${{ secrets.ALERT_SMTP_HOST }}
+          ALERT_SMTP_USER: ${{ secrets.ALERT_SMTP_USER }}
+          ALERT_SMTP_PASSWORD: ${{ secrets.ALERT_SMTP_PASSWORD }}
+          ALERT_SMTP_PORT: ${{ vars.ALERT_SMTP_PORT }}
+          TZ: Asia/Shanghai
+
       - name: Deploy to GitHub Pages
         if: steps.verify.outputs.changed == 'true'
         uses: peaceiris/actions-gh-pages@v4
@@ -86,6 +128,8 @@ jobs:
           exclude_assets: |
             .github
             daily_update.py
+            premium_alert.py
+            premium-alert-state.json
             fetch_etf_data.py
             fetch_etf_data_v2.py
             add_etf_159509.py

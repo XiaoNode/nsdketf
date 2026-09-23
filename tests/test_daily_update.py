@@ -145,6 +145,7 @@ class UpdateFailureTests(unittest.TestCase):
         with (
             patch.object(daily_update, 'load_codes', return_value=['sh000001']),
             patch.object(daily_update, 'prepare_update', return_value=failed_result),
+            patch.object(daily_update, 'update_otc_quota_status'),
             patch.object(daily_update, 'write_update') as write_update,
         ):
             exit_code = daily_update.main([])
