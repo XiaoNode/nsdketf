@@ -6,6 +6,7 @@ market data. Recipient and SMTP credentials are read from Actions Secrets.
 """
 
 import argparse
+import calendar
 import hashlib
 import json
 import math
@@ -47,6 +48,63 @@ def expected_price_date(now):
     return day.isoformat()
 
 
+def months_ago(day, months):
+    """Calendar-month lookback, clamping dates such as March 31 to February 28."""
+    year, month = divmod(day.year * 12 + day.month - 1 - months, 12)
+    month += 1
+    return day.replace(year=year, month=month,
+                       day=min(day.day, calendar.monthrange(year, month)[1]))
+
+
+def verified_premiums(info, through_date):
+    """Recheck historical values against that day's price and referenced NAV."""
+    prices = {item['date']: item.get('value') for item in info.get('price') or []
+              if daily_update.is_valid_date(item.get('date'))}
+    navs = {item['date']: item.get('value') for item in info.get('nav') or []
+            if daily_update.is_valid_date(item.get('date'))}
+    verified = {}
+    for record in info.get('premium') or []:
+        day = record.get('date')
+        nav_day = record.get('nav_date')
+        if not daily_update.is_valid_date(day) or day > through_date:
+            continue
+        if not daily_update.is_valid_date(nav_day):
+            continue
+        if nav_day < daily_update.previous_trading_day(day) or nav_day > day:
+            continue
+        try:
+            premium = float(record['value'])
+            price = float(prices.get(day))
+            nav = float(navs.get(nav_day))
+        except (ValueError, TypeError, KeyError):
+            continue
+        if not all(map(math.isfinite, (premium, price, nav))) or price <= 0 or nav <= 0:
+            continue
+        if abs(premium) > daily_update.MAX_ABS_PREMIUM:
+            continue
+        if abs((price / nav - 1) * 100 - premium) > 0.01:
+            continue
+        verified[day] = premium
+    return verified
+
+
+def premium_comparison(history, price_date):
+    """Compare previous available session; averages exclude today's alert session."""
+    prior = sorted((day, value) for day, value in history.items() if day < price_date)
+    previous_day, previous_value = prior[-1] if prior else (None, None)
+    today = datetime.strptime(price_date, '%Y-%m-%d').date()
+    averages = {}
+    for months in (1, 3, 12):
+        start = months_ago(today, months).isoformat()
+        values = [value for day, value in prior if start <= day]
+        # An incomplete inception window must not be passed off as a full-period average.
+        averages[months] = (sum(values) / len(values), len(values)) if values and prior[0][0] <= start else None
+    return {
+        'previous_date': previous_day, 'previous_premium': previous_value,
+        'averages': averages,
+    }
+
+
 def select_candidates(root, price_date):
     """Only include verified, fresh premiums; never treat missing data as zero."""
     selected = []
@@ -61,29 +119,14 @@ def select_candidates(root, price_date):
             record = premiums[-1]
             if record.get('date') != price_date:
                 continue
-            nav_date = record.get('nav_date')
-            if not daily_update.is_valid_date(nav_date):
-                continue
-            if nav_date < daily_update.previous_trading_day(price_date) or nav_date > price_date:
-                continue
-            price = next((item.get('value') for item in reversed(info.get('price') or [])
-                          if item.get('date') == price_date), None)
-            nav = next((item.get('value') for item in reversed(info.get('nav') or [])
-                        if item.get('date') == nav_date), None)
-            try:
-                premium = float(record['value'])
-                p = float(price)
-                n = float(nav)
-            except (ValueError, TypeError, KeyError):
-                continue
-            if not all(map(math.isfinite, (premium, p, n))) or p <= 0 or n <= 0:
-                continue
-            if abs((p / n - 1) * 100 - premium) > 0.01:
-                continue
-            if premium < THRESHOLD:
+            history = verified_premiums(info, price_date)
+            premium = history.get(price_date)
+            if premium is not None and premium < THRESHOLD:
                 selected.append({
                     'group': label, 'code': code, 'name': info.get('name') or code,
-                    'premium': premium, 'price_date': price_date, 'nav_date': nav_date,
+                    'premium': premium, 'price_date': price_date,
+                    'nav_date': record['nav_date'],
+                    'comparison': premium_comparison(history, price_date),
                 })
     return sorted(selected, key=lambda item: (item['premium'], item['code']))
 
@@ -176,12 +219,30 @@ def build_message(candidates, today, recipient, sender):
     mail['From'] = sender
     mail['To'] = recipient
     mail['Subject'] = f'场内ETF低溢价关注提醒｜{today}｜{len(candidates)}只'
-    rows = [f'{item["group"]} | {item["name"]} ({item["code"]}) | '
-            f'{item["premium"]:+.4f}% | 收盘日 {item["price_date"]} | '
-            f'净值日 {item["nav_date"]}' for item in candidates]
+    rows = []
+    for item in candidates:
+        comparison = item['comparison']
+        previous = (f'{comparison["previous_premium"]:+.4f}% '
+                    f'({comparison["previous_date"]})'
+                    if comparison['previous_date'] else '数据不足')
+        change = (f'{item["premium"] - comparison["previous_premium"]:+.4f} 个百分点'
+                  if comparison['previous_date'] else '数据不足')
+        averages = []
+        for months, label in ((1, '近1个月'), (3, '近3个月'), (12, '近1年')):
+            result = comparison['averages'][months]
+            averages.append(f'{label}平均：{result[0]:+.4f}%（{result[1]}个有效交易日）'
+                            if result else f'{label}平均：数据不足')
+        rows.extend([
+            f'{item["group"]} | {item["name"]} ({item["code"]})',
+            f'  当前溢价：{item["premium"]:+.4f}%（收盘日 {item["price_date"]}，净值日 {item["nav_date"]}）',
+            f'  上一有效交易日：{previous}；变化：{change}',
+            *(f'  {average}' for average in averages),
+            '',
+        ])
     mail.set_content('\n'.join([
         f'北京时间 {today}，以下 {len(candidates)} 只场内ETF的有效溢价率低于 5%：',
-        '', *rows, '',
+        '', *rows,
+        '历史均值按对应日历区间内的有效交易日等权平均，排除本次收盘日；历史不足完整区间显示数据不足。',
         '口径：场内收盘价 ÷ 已披露单位净值 − 1；并非实时IOPV溢价。',
         '来源：本项目每日更新的收盘价与基金净值；QDII净值存在披露滞后。',
         '仅作关注提醒，不构成投资建议。',

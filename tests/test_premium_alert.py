@@ -43,6 +43,59 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]['premium'], 4.9999)
 
+    def test_historical_comparison_excludes_today_and_uses_calendar_windows(self):
+        history = {
+            '2025-09-22': 8.0,
+            '2026-06-22': 6.0,
+            '2026-08-22': 4.0,
+            '2026-09-21': 2.0,
+            '2026-09-22': 3.0,
+            '2026-09-23': 1.0,
+        }
+        comparison = premium_alert.premium_comparison(history, '2026-09-23')
+        self.assertEqual(comparison['previous_date'], '2026-09-22')
+        self.assertEqual(comparison['previous_premium'], 3.0)
+        self.assertEqual(comparison['averages'][1], (2.5, 2))
+        self.assertEqual(comparison['averages'][3], (3.0, 3))
+        self.assertEqual(comparison['averages'][12], (3.75, 4))
+        item = {'group': '纳斯达克100', 'name': '示例', 'code': 'sz000001',
+                'premium': 1.0, 'price_date': '2026-09-23',
+                'nav_date': '2026-09-22', 'comparison': comparison}
+        body = premium_alert.build_message([item], '2026-09-23',
+                                           ENV['ALERT_TO_EMAIL'], ENV['ALERT_SMTP_USER']).get_content()
+        self.assertIn('上一有效交易日：+3.0000% (2026-09-22)', body)
+        self.assertIn('变化：-2.0000 个百分点', body)
+        self.assertIn('近1个月平均：+2.5000%（2个有效交易日）', body)
+        self.assertIn('近3个月平均：+3.0000%（3个有效交易日）', body)
+        self.assertIn('近1年平均：+3.7500%（4个有效交易日）', body)
+
+    def test_invalid_history_and_insufficient_periods(self):
+        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-22')})
+        data_file = self.root / 'etf_all.json'
+        data = json.loads(data_file.read_text(encoding='utf-8'))
+        info = next(iter(data.values()))
+        info['premium'] = [
+            {'date': '2026-09-18', 'nav_date': '2026-09-17', 'value': 3.0},
+            {'date': '2026-09-21', 'nav_date': '2026-09-18', 'value': 2.0},
+            info['premium'][0],
+        ]
+        info['price'].extend([{'date': '2026-09-18', 'value': 1.03},
+                              {'date': '2026-09-21', 'value': 1.09}])
+        info['nav'].extend([{'date': '2026-09-17', 'value': 1.0},
+                            {'date': '2026-09-18', 'value': 1.0}])
+        data_file.write_text(json.dumps(data), encoding='utf-8')
+        candidate = premium_alert.select_candidates(self.root, '2026-09-23')[0]
+        self.assertEqual(candidate['comparison']['previous_date'], '2026-09-18')
+        self.assertIsNone(candidate['comparison']['averages'][1])
+        body = premium_alert.build_message([candidate], '2026-09-23',
+                                           ENV['ALERT_TO_EMAIL'], ENV['ALERT_SMTP_USER']).get_content()
+        self.assertIn('近1个月平均：数据不足', body)
+        self.assertNotIn('2026-09-21)', body)
+
+    def test_calendar_month_end_clamps(self):
+        self.assertEqual(premium_alert.months_ago(datetime(2026, 3, 31).date(), 1).isoformat(),
+                         '2026-02-28')
+
     def test_exactly_five_is_not_selected(self):
         self.write_funds({'etf_all.json': (5.0, '2026-09-23', '2026-09-22')})
         self.assertEqual(premium_alert.select_candidates(self.root, '2026-09-23'), [])
@@ -99,6 +152,7 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(len(SMTP.sent), 1)
         self.assertEqual(SMTP.sent[0]['To'], ENV['ALERT_TO_EMAIL'])
         self.assertIn('4.9999%', SMTP.sent[0].get_content())
+        self.assertIn('上一有效交易日：数据不足', SMTP.sent[0].get_content())
 
     def test_changed_data_refuses_claim(self):
         self.assertTrue(premium_alert.prepare(self.root, self.state, self.now, env=ENV))
