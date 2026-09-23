@@ -100,24 +100,6 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(SMTP.sent[0]['To'], ENV['ALERT_TO_EMAIL'])
         self.assertIn('4.9999%', SMTP.sent[0].get_content())
 
-    def test_one_off_email_does_not_touch_daily_state(self):
-        class SMTP:
-            sent = []
-            def __init__(self, *args, **kwargs):
-                pass
-            def __enter__(self):
-                return self
-            def __exit__(self, *args):
-                pass
-            def login(self, *args):
-                pass
-            def send_message(self, message):
-                self.sent.append(message)
-        premium_alert.send_test_email(env=ENV, smtp_factory=SMTP)
-        self.assertEqual(len(SMTP.sent), 1)
-        self.assertIn('邮件通道测试', SMTP.sent[0]['Subject'])
-        self.assertFalse(self.state.exists())
-
     def test_changed_data_refuses_claim(self):
         self.assertTrue(premium_alert.prepare(self.root, self.state, self.now, env=ENV))
         self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-22')})

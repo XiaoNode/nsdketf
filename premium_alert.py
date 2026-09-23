@@ -223,36 +223,9 @@ def send(root, state_path, now, env=None, smtp_factory=None):
     print(f'[Alert] Submitted one email for {len(candidates)} ETFs on {today}')
 
 
-def send_test_email(env=None, smtp_factory=None):
-    """One-off SMTP connectivity check; does not affect the daily alert state."""
-    env = os.environ if env is None else env
-    if not all(env.get(key) for key in REQUIRED_SECRETS):
-        raise ValueError('mail Secrets missing')
-    port = int(env.get('ALERT_SMTP_PORT') or '465')
-    if port not in (465, 587):
-        raise ValueError('ALERT_SMTP_PORT must be 465 or 587')
-    mail = EmailMessage()
-    mail['From'] = env['ALERT_SMTP_USER']
-    mail['To'] = env['ALERT_TO_EMAIL']
-    mail['Subject'] = '场内ETF低溢价提醒｜邮件通道测试'
-    mail.set_content('这是一封一次性测试邮件，用于确认 GitHub Actions 的 SMTP 配置可以正常发信。\n'
-                     '此邮件不代表任何 ETF 触发了低溢价提醒，也不影响每日提醒次数。')
-    context = ssl.create_default_context()
-    if smtp_factory is None:
-        smtp_factory = smtplib.SMTP_SSL if port == 465 else smtplib.SMTP
-    connection = (smtp_factory(env['ALERT_SMTP_HOST'], port, timeout=20, context=context)
-                  if port == 465 else smtp_factory(env['ALERT_SMTP_HOST'], port, timeout=20))
-    with connection:
-        if port == 587:
-            connection.starttls(context=context)
-        connection.login(env['ALERT_SMTP_USER'], env['ALERT_SMTP_PASSWORD'])
-        connection.send_message(mail)
-    print('[Alert] Test email submitted to SMTP server')
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Reserve and send one low-premium ETF email per Beijing day')
-    parser.add_argument('action', choices=('prepare', 'claim', 'send', 'test-email'))
+    parser.add_argument('action', choices=('prepare', 'claim', 'send'))
     args = parser.parse_args(argv)
     now = datetime.now(BEIJING)
     try:
@@ -260,8 +233,6 @@ def main(argv=None):
             prepare(ROOT, STATE_PATH, now, output_path=os.environ.get('GITHUB_OUTPUT'))
         elif args.action == 'claim':
             claim(ROOT, STATE_PATH, now, output_path=os.environ.get('GITHUB_OUTPUT'))
-        elif args.action == 'test-email':
-            send_test_email()
         else:
             send(ROOT, STATE_PATH, now)
     except Exception:
