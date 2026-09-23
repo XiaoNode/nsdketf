@@ -43,6 +43,45 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]['premium'], 4.9999)
 
+    def test_high_premium_ranking_in_same_email(self):
+        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-22'),
+                          'sp500_all.json': (12.0, '2026-09-23', '2026-09-22'),
+                          'us50_all.json': (8.0, '2026-09-23', '2026-09-22'),
+                          'djia_all.json': (5.0, '2026-09-23', '2026-09-22')})
+        ranked = premium_alert.select_ranked_funds(self.root, '2026-09-23')
+        self.assertEqual([item['premium'] for item in ranked], [12.0, 8.0, 5.0, 4.0])
+        candidates = premium_alert.select_candidates(self.root, '2026-09-23')
+        self.assertEqual([item['premium'] for item in candidates], [4.0])
+        message = premium_alert.build_message(candidates, '2026-09-23',
+                                              ENV['ALERT_TO_EMAIL'], ENV['ALERT_SMTP_USER'], ranked)
+        text = message.get_body(preferencelist=('plain',)).get_content()
+        self.assertIn('以下 1 只场内ETF的有效溢价率低于 5%', text)
+        self.assertIn('当日场内ETF溢价从高到低（4只', text)
+        self.assertLess(text.index('12.0000%'), text.index('8.0000%'))
+        self.assertLess(text.index('8.0000%'), text.index('5.0000%'))
+        self.assertLess(text.index('5.0000%'), text.index('4.0000%', text.index('当日场内ETF溢价从高到低')))
+        html_body = message.get_body(preferencelist=('html',)).get_content()
+        self.assertIn('<table', html_body)
+        self.assertEqual(html_body.count('<tr>'), 5)
+        self.assertIn('近1个月均值', html_body)
+
+    def test_ranking_excludes_stale_and_unverified_funds(self):
+        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-22'),
+                          'sp500_all.json': (12.0, '2026-09-22', '2026-09-21'),
+                          'us50_all.json': (8.0, '2026-09-23', '2026-09-22')})
+        file = self.root / 'us50_all.json'
+        data = json.loads(file.read_text(encoding='utf-8'))
+        next(iter(data.values()))['price'][0]['value'] = 1.09
+        file.write_text(json.dumps(data), encoding='utf-8')
+        ranked = premium_alert.select_ranked_funds(self.root, '2026-09-23')
+        self.assertEqual([item['code'] for item in ranked], ['sh500003', 'sh500000'])
+
+    def test_no_low_premium_does_not_reserve_even_when_ranking_exists(self):
+        self.write_funds()
+        self.assertEqual(len(premium_alert.select_ranked_funds(self.root, '2026-09-23')), 4)
+        self.assertFalse(premium_alert.prepare(self.root, self.state, self.now, env=ENV))
+        self.assertFalse(self.state.exists())
+
     def test_historical_comparison_excludes_today_and_uses_calendar_windows(self):
         history = {
             '2025-09-22': 8.0,
@@ -62,7 +101,7 @@ class AlertTests(unittest.TestCase):
                 'premium': 1.0, 'price_date': '2026-09-23',
                 'nav_date': '2026-09-22', 'comparison': comparison}
         body = premium_alert.build_message([item], '2026-09-23',
-                                           ENV['ALERT_TO_EMAIL'], ENV['ALERT_SMTP_USER']).get_content()
+                                           ENV['ALERT_TO_EMAIL'], ENV['ALERT_SMTP_USER']).get_body(preferencelist=('plain',)).get_content()
         self.assertIn('上一有效交易日：+3.0000% (2026-09-22)', body)
         self.assertIn('变化：-2.0000 个百分点', body)
         self.assertIn('近1个月平均：+2.5000%（2个有效交易日）', body)
@@ -88,7 +127,7 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(candidate['comparison']['previous_date'], '2026-09-18')
         self.assertIsNone(candidate['comparison']['averages'][1])
         body = premium_alert.build_message([candidate], '2026-09-23',
-                                           ENV['ALERT_TO_EMAIL'], ENV['ALERT_SMTP_USER']).get_content()
+                                           ENV['ALERT_TO_EMAIL'], ENV['ALERT_SMTP_USER']).get_body(preferencelist=('plain',)).get_content()
         self.assertIn('近1个月平均：数据不足', body)
         self.assertNotIn('2026-09-21)', body)
 
@@ -151,8 +190,11 @@ class AlertTests(unittest.TestCase):
         premium_alert.send(self.root, self.state, self.now, env=ENV, smtp_factory=SMTP)
         self.assertEqual(len(SMTP.sent), 1)
         self.assertEqual(SMTP.sent[0]['To'], ENV['ALERT_TO_EMAIL'])
-        self.assertIn('4.9999%', SMTP.sent[0].get_content())
-        self.assertIn('上一有效交易日：数据不足', SMTP.sent[0].get_content())
+        plain = SMTP.sent[0].get_body(preferencelist=('plain',)).get_content()
+        self.assertIn('4.9999%', plain)
+        self.assertIn('上一有效交易日：数据不足', plain)
+        self.assertIn('当日场内ETF溢价从高到低', plain)
+        self.assertEqual(SMTP.sent[0].get_body(preferencelist=('html',)).get_content().count('<tr>'), 5)
 
     def test_changed_data_refuses_claim(self):
         self.assertTrue(premium_alert.prepare(self.root, self.state, self.now, env=ENV))

@@ -8,6 +8,7 @@ market data. Recipient and SMTP credentials are read from Actions Secrets.
 import argparse
 import calendar
 import hashlib
+import html
 import json
 import math
 import os
@@ -105,8 +106,8 @@ def premium_comparison(history, price_date):
     }
 
 
-def select_candidates(root, price_date):
-    """Only include verified, fresh premiums; never treat missing data as zero."""
+def select_ranked_funds(root, price_date):
+    """All four on-exchange groups, fresh and verified, highest premium first."""
     selected = []
     for label, filename in GROUPS:
         data = json.loads((root / filename).read_text(encoding='utf-8'))
@@ -121,14 +122,21 @@ def select_candidates(root, price_date):
                 continue
             history = verified_premiums(info, price_date)
             premium = history.get(price_date)
-            if premium is not None and premium < THRESHOLD:
+            if premium is not None:
                 selected.append({
                     'group': label, 'code': code, 'name': info.get('name') or code,
                     'premium': premium, 'price_date': price_date,
                     'nav_date': record['nav_date'],
                     'comparison': premium_comparison(history, price_date),
                 })
-    return sorted(selected, key=lambda item: (item['premium'], item['code']))
+    return sorted(selected, key=lambda item: (-item['premium'], item['code']))
+
+
+def select_candidates(root, price_date):
+    """Return only verified funds below the strict alert threshold."""
+    return sorted((item for item in select_ranked_funds(root, price_date)
+                   if item['premium'] < THRESHOLD),
+                  key=lambda item: (item['premium'], item['code']))
 
 
 def fingerprint(candidates):
@@ -214,39 +222,75 @@ def claim(root, state_path, now, output_path=None, env=None):
     return True
 
 
-def build_message(candidates, today, recipient, sender):
+def comparison_cells(item):
+    comparison = item['comparison']
+    previous = (f'{comparison["previous_premium"]:+.4f}% ({comparison["previous_date"]})'
+                if comparison['previous_date'] else '数据不足')
+    change = (f'{item["premium"] - comparison["previous_premium"]:+.4f} 个百分点'
+              if comparison['previous_date'] else '数据不足')
+    averages = {}
+    for months in (1, 3, 12):
+        result = comparison['averages'][months]
+        averages[months] = (f'{result[0]:+.4f}%（{result[1]}个有效交易日）'
+                            if result else '数据不足')
+    return previous, change, averages
+
+
+def build_message(candidates, today, recipient, sender, ranked=None):
+    ranked = sorted(candidates if ranked is None else ranked,
+                    key=lambda item: (-item['premium'], item['code']))
     mail = EmailMessage()
     mail['From'] = sender
     mail['To'] = recipient
     mail['Subject'] = f'场内ETF低溢价关注提醒｜{today}｜{len(candidates)}只'
     rows = []
     for item in candidates:
-        comparison = item['comparison']
-        previous = (f'{comparison["previous_premium"]:+.4f}% '
-                    f'({comparison["previous_date"]})'
-                    if comparison['previous_date'] else '数据不足')
-        change = (f'{item["premium"] - comparison["previous_premium"]:+.4f} 个百分点'
-                  if comparison['previous_date'] else '数据不足')
-        averages = []
-        for months, label in ((1, '近1个月'), (3, '近3个月'), (12, '近1年')):
-            result = comparison['averages'][months]
-            averages.append(f'{label}平均：{result[0]:+.4f}%（{result[1]}个有效交易日）'
-                            if result else f'{label}平均：数据不足')
+        previous, change, averages = comparison_cells(item)
         rows.extend([
             f'{item["group"]} | {item["name"]} ({item["code"]})',
             f'  当前溢价：{item["premium"]:+.4f}%（收盘日 {item["price_date"]}，净值日 {item["nav_date"]}）',
             f'  上一有效交易日：{previous}；变化：{change}',
-            *(f'  {average}' for average in averages),
+            f'  近1个月平均：{averages[1]}',
+            f'  近3个月平均：{averages[3]}',
+            f'  近1年平均：{averages[12]}',
             '',
         ])
-    mail.set_content('\n'.join([
-        f'北京时间 {today}，以下 {len(candidates)} 只场内ETF的有效溢价率低于 5%：',
-        '', *rows,
+    header = '排名 | 类别 | 基金（代码） | 当前溢价 | 上一有效日 | 变化 | 近1个月均值 | 近3个月均值 | 近1年均值 | 净值日'
+    ranking = [header]
+    table_rows = []
+    for position, item in enumerate(ranked, start=1):
+        previous, change, averages = comparison_cells(item)
+        cells = [str(position), item['group'], f'{item["name"]}（{item["code"]}）',
+                 f'{item["premium"]:+.4f}%', previous, change,
+                 averages[1], averages[3], averages[12], item['nav_date']]
+        ranking.append(' | '.join(cells))
+        table_rows.append('<tr>' + ''.join(f'<td>{html.escape(cell)}</td>' for cell in cells) + '</tr>')
+    alert_lines = [f'北京时间 {today}，以下 {len(candidates)} 只场内ETF的有效溢价率低于 5%：',
+                   '', *rows]
+    plain = '\n'.join([
+        *alert_lines,
+        f'当日场内ETF溢价从高到低（{len(ranked)}只；仅含当日有效数据）：',
+        *ranking, '',
         '历史均值按对应日历区间内的有效交易日等权平均，排除本次收盘日；历史不足完整区间显示数据不足。',
         '口径：场内收盘价 ÷ 已披露单位净值 − 1；并非实时IOPV溢价。',
         '来源：本项目每日更新的收盘价与基金净值；QDII净值存在披露滞后。',
         '仅作关注提醒，不构成投资建议。',
-    ]))
+    ])
+    mail.set_content(plain)
+    if ranked:
+        headings = ['排名', '类别', '基金（代码）', '当前溢价', '上一有效日', '变化',
+                    '近1个月均值', '近3个月均值', '近1年均值', '净值日']
+        html_body = ('<html><body><div style="white-space:pre-wrap">'
+                     + html.escape('\n'.join(alert_lines).strip())
+                     + '</div><h3>当日场内ETF溢价从高到低</h3>'
+                     + '<p>仅含当日有效数据，按当前溢价降序排列。</p>'
+                     + '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse">'
+                     + '<thead><tr>' + ''.join(f'<th>{html.escape(label)}</th>' for label in headings)
+                     + '</tr></thead><tbody>' + ''.join(table_rows) + '</tbody></table>'
+                     + '<p>历史均值按对应日历区间内的有效交易日等权平均，排除本次收盘日；'
+                     + '历史不足完整区间显示数据不足。场内收盘价 ÷ 已披露单位净值 − 1；'
+                     + '并非实时IOPV溢价。仅作关注提醒，不构成投资建议。</p></body></html>')
+        mail.add_alternative(html_body, subtype='html')
     return mail
 
 
@@ -270,7 +314,8 @@ def send(root, state_path, now, env=None, smtp_factory=None):
         raise ValueError('ALERT_SMTP_PORT must be 465 or 587')
     host = env['ALERT_SMTP_HOST']
     sender = env['ALERT_SMTP_USER']
-    mail = build_message(candidates, today, env['ALERT_TO_EMAIL'], sender)
+    ranked = select_ranked_funds(root, state['price_date'])
+    mail = build_message(candidates, today, env['ALERT_TO_EMAIL'], sender, ranked=ranked)
     context = ssl.create_default_context()
     if smtp_factory is None:
         smtp_factory = smtplib.SMTP_SSL if port == 465 else smtplib.SMTP
