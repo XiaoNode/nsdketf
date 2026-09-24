@@ -105,7 +105,7 @@
   };
 
   /* ---------- 持仓状态 ---------- */
-  let HOLDINGS = [];      // [{code, lots:[{date, shares, price, fee?}]}]
+  let HOLDINGS = [];      // [{code, lots:[{date, shares, price, fee?, buyPremium?}]}]
   let GH_CONNECTED = false;
   // 展开的 ETF code 集合; 默认空集 = 每个 ETF 下的建仓明细默认折叠
   const EXPANDED = new Set();
@@ -207,6 +207,25 @@
     return { s, p, amount, fee, netCost, mv, pnl, pct, date: lot.date };
   }
 
+  // 未手填时仅匹配买入日的日终历史溢价，不用相邻日或最新值冒充盘中成交溢价。
+  function buyPremiumInfo(lot, etf) {
+    if (typeof lot.buyPremium === 'number' && Number.isFinite(lot.buyPremium)) {
+      return { value: lot.buyPremium, source: '手填买入时溢价' };
+    }
+    const match = lot.date && etf && Array.isArray(etf.premium)
+      ? etf.premium.find(p => p.date === lot.date && typeof p.value === 'number' && Number.isFinite(p.value))
+      : null;
+    return match ? { value: match.value, source: lot.date + ' 日终历史溢价（自动）' }
+      : { value: null, source: '买入日期无有效历史溢价' };
+  }
+
+  function optionalPremium(input) {
+    const raw = String(input == null ? '' : input).trim();
+    if (!raw) return { value: null, valid: true };
+    const value = Number(raw);
+    return { value, valid: Number.isFinite(value) };
+  }
+
   function normalizeHolding(h) {
     if (!h || !h.code || !ALL_ETF[h.code]) return null;
     if (Array.isArray(h.lots)) {
@@ -216,7 +235,8 @@
           date: (l.date || '').toString(),
           shares: Number(l.shares),
           price: Number(l.price),
-          fee: (typeof l.fee === 'number' && l.fee >= 0) ? l.fee : 0  // 旧数据无 fee 视为 0, 不重算
+          fee: (typeof l.fee === 'number' && l.fee >= 0) ? l.fee : 0, // 旧数据无 fee 视为 0, 不重算
+          ...(typeof l.buyPremium === 'number' && Number.isFinite(l.buyPremium) ? { buyPremium: l.buyPremium } : {})
         }));
     } else if (h.shares != null && h.costPerShare != null) {
       // 兼容旧版单笔均价格式
@@ -368,12 +388,13 @@
 
 <div class="chart-card">
   <h3>&#10133; 添加建仓记录</h3>
-  <div class="chart-desc">按买入日期记录每笔建仓（分批买入可加多条）。手续费默认按下方费率自动计算，也可手动修改。</div>
+  <div class="chart-desc">按买入日期记录每笔建仓（分批买入可加多条）。手续费可修改；买入时溢价可选填，留空按买入日期显示日终历史溢价（不是盘中成交时溢价），无当日数据则显示“—”。</div>
   <div class="pf-toolbar" style="margin-top:12px;align-items:flex-end;flex-wrap:wrap">
     <div class="pf-field"><label>ETF</label><select id="pfCode" class="pf-select">${codeOptionsHTML()}</select></div>
     <div class="pf-field"><label>买入日期</label><input type="date" id="pfDate" class="pf-input"></div>
     <div class="pf-field"><label>份额</label><input type="number" id="pfShares" class="pf-input" placeholder="如 100" min="0" step="any"></div>
     <div class="pf-field"><label>买入单价(¥/份)</label><input type="number" id="pfCost" class="pf-input" placeholder="如 1.234" min="0" step="any"></div>
+    <div class="pf-field"><label>买入时溢价(%，选填)</label><input type="number" id="pfBuyPremium" class="pf-input" placeholder="留空取买入日" step="any"></div>
     <div class="pf-field"><label>手续费(¥)</label><input type="number" id="pfFee" class="pf-input" placeholder="自动" min="0" step="any"></div>
     <div class="pf-field" style="min-width:110px"><label>成交额</label><span id="pfAmountPreview" style="padding:6px 10px;font-weight:600">¥0.00</span></div>
     <div class="pf-field" style="min-width:110px"><label>成本(含费)</label><span id="pfNetCostPreview" style="padding:6px 10px;font-weight:600;color:var(--text)">¥0.00</span></div>
@@ -394,7 +415,7 @@
   <h3>&#128202; 持仓明细</h3>
   <div class="chart-desc">每笔建仓独立清算，同一 ETF 的多笔合并为汇总行并<strong>默认折叠</strong>，点击汇总行展开/收起明细，每笔均可编辑。红=盈利，绿=亏损（A股惯例）。</div>
   <table class="premium-table" style="margin-top:8px">
-    <thead><tr><th>名称 / 代码</th><th>市场</th><th>日期</th><th>份额</th><th>买入单价</th><th>手续费</th><th>投入(含费)</th><th>最新价</th><th>当前市值</th><th>盈亏额</th><th>盈亏%</th><th></th></tr></thead>
+    <thead><tr><th>名称 / 代码</th><th>市场</th><th>日期</th><th>份额</th><th>买入单价</th><th>买入溢价</th><th>手续费</th><th>投入(含费)</th><th>最新价</th><th>当前市值</th><th>盈亏额</th><th>盈亏%</th><th></th></tr></thead>
     <tbody id="pfTbody"></tbody>
   </table>
 </div>`;
@@ -419,6 +440,7 @@
     const dateEl = document.getElementById('pfDate');
     const sharesEl = document.getElementById('pfShares');
     const costEl = document.getElementById('pfCost');
+    const premiumEl = document.getElementById('pfBuyPremium');
     const feeEl = document.getElementById('pfFee');
     const rateEl = document.getElementById('pfFeeRate');
     const minEl = document.getElementById('pfMinFee');
@@ -453,6 +475,8 @@
       const date = dateEl ? dateEl.value : '';
       const shares = parseFloat(sharesEl.value);
       const price = parseFloat(costEl.value);
+      const premium = optionalPremium(premiumEl ? premiumEl.value : '');
+      if (!premium.valid) { toast('请输入有效的买入时溢价，或留空自动匹配买入日', true); return; }
       const amount = shares * price;
       let fee = parseFloat(feeEl ? feeEl.value : '');
       if (!isFinite(fee) || fee < 0) fee = calcFee(amount, getSettings());
@@ -462,10 +486,10 @@
       saveFeeSettings(settings);
       let ex = HOLDINGS.find(h => h.code === code);
       if (!ex) { ex = { code, lots: [] }; HOLDINGS.push(ex); }
-      ex.lots.push({ date: date || '', shares, price, fee });
+      ex.lots.push({ date: date || '', shares, price, fee, ...(premium.value != null ? { buyPremium: premium.value } : {}) });
       EXPANDED.add(code);          // 刚添加的 ETF 自动展开, 便于确认记录已写入
       persistHoldings(); renderHoldingsTable();
-      sharesEl.value = ''; costEl.value = ''; if (feeEl) { feeEl.value = ''; delete feeEl.dataset.userEdited; }
+      sharesEl.value = ''; costEl.value = ''; if (premiumEl) premiumEl.value = ''; if (feeEl) { feeEl.value = ''; delete feeEl.dataset.userEdited; }
       if (amtEl) amtEl.textContent = '¥0.00'; if (netEl) netEl.textContent = '¥0.00';
     });
 
@@ -518,7 +542,7 @@
     const sumBox = document.getElementById('pfSummary');
     if (!tbody) return;
     if (!HOLDINGS.length) {
-      tbody.innerHTML = '<tr><td colspan="12" style="color:var(--text2);text-align:center;padding:24px">暂无持仓，先在上方添加建仓记录。</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="13" style="color:var(--text2);text-align:center;padding:24px">暂无持仓，先在上方添加建仓记录。</td></tr>';
       if (sumBox) sumBox.innerHTML = '';
       return;
     }
@@ -535,6 +559,7 @@
         <td style="color:var(--text2)">${r.lots.length} 笔</td>
         <td style="font-weight:600">${r.shares}</td>
         <td>${fmtPrice(r.avgCost)}</td>
+        <td>—</td>
         <td style="font-weight:600">${fmtMoney(r.totalFee)}</td>
         <td style="font-weight:600">${fmtMoney(r.netCost)}</td>
         <td>${fmtPrice(r.price)}</td>
@@ -547,6 +572,8 @@
       // 每笔建仓明细 (折叠时不渲染)
       r.lots.forEach((lot, i) => {
         const lv = lotValues(lot, r.price);
+        const premiumInfo = buyPremiumInfo(lot, r.etf);
+        const premiumTitle = esc(premiumInfo.source);
         const editing = EDITING && EDITING.code === h.code && EDITING.lot === lot;
         if (editing) {
           rows += `<tr class="pf-lot pf-lot-editing">
@@ -554,6 +581,7 @@
             <td><input type="date" id="pfEditDate" class="pf-input-mini" value="${esc(lot.date || '')}"></td>
             <td><input type="number" id="pfEditShares" class="pf-input-mini" value="${lv.s}" min="0" step="any"></td>
             <td><input type="number" id="pfEditPrice" class="pf-input-mini" value="${lv.p}" min="0" step="any"></td>
+            <td><input type="number" id="pfEditBuyPremium" class="pf-input-mini" value="${typeof lot.buyPremium === 'number' ? lot.buyPremium : ''}" placeholder="自动匹配买入日" step="any" title="留空按买入日期显示日终历史溢价"></td>
             <td><input type="number" id="pfEditFee" class="pf-input-mini" value="${lv.fee}" min="0" step="any"></td>
             <td id="pfEditNet">${fmtMoney(lv.netCost)}</td>
             <td>${fmtPrice(r.price)}</td>
@@ -569,6 +597,7 @@
           <td>${esc(lot.date || '—')}</td>
           <td>${lv.s}</td>
           <td>${fmtPrice(lv.p)}</td>
+          <td title="${premiumTitle}">${fmtPct(premiumInfo.value)}${premiumInfo.value != null && typeof lot.buyPremium !== 'number' ? ' <small>自动</small>' : ''}</td>
           <td>${fmtMoney(lv.fee)}</td>
           <td>${fmtMoney(lv.netCost)}</td>
           <td>${fmtPrice(r.price)}</td>
@@ -640,7 +669,10 @@
       const dEl = document.getElementById('pfEditDate');
       const sEl = document.getElementById('pfEditShares');
       const pEl = document.getElementById('pfEditPrice');
+      const premiumEl = document.getElementById('pfEditBuyPremium');
       const fEl = document.getElementById('pfEditFee');
+      const premium = optionalPremium(premiumEl ? premiumEl.value : '');
+      if (!premium.valid) { toast('请输入有效的买入时溢价，或留空自动匹配买入日', true); return; }
       const shares = parseFloat(sEl.value);
       const price = parseFloat(pEl.value);
       if (!(shares > 0) || !(price > 0)) { toast('请填写有效的份额 / 买入单价', true); return; }
@@ -648,7 +680,8 @@
       if (!isFinite(fee) || fee < 0) fee = calcFee(shares * price, currentFeeSettings());
       const realIdx = ex.lots.indexOf(lot);
       if (realIdx < 0) return;
-      ex.lots[realIdx] = { date: dEl ? dEl.value : lot.date, shares: shares, price: price, fee: fee };
+      ex.lots[realIdx] = { date: dEl ? dEl.value : lot.date, shares: shares, price: price, fee: fee,
+        ...(premium.value != null ? { buyPremium: premium.value } : {}) };
       EDITING = null;
       persistHoldings(); renderHoldingsTable();
       toast('已保存该笔建仓记录');
@@ -711,7 +744,8 @@
     module.exports = {
       computeRow, computeSummary, lotValues, calcFee, currentFeeSettings,
       fmtPct, fmtMoney, fmtPrice, fmtPnl, formatRatePct, formatRateWan,
-      FEE_DEFAULTS, ALL_ETF, MARKET_OF, loadHoldings, renderHoldingsTable,
+      FEE_DEFAULTS, ALL_ETF, MARKET_OF, loadHoldings, buyPremiumInfo, optionalPremium,
+      holdingsPanelHTML, bindHoldingsPanel, renderHoldingsTable,
       setHoldings: function (h) { HOLDINGS = h; },
       getHoldings: function () { return HOLDINGS; },
       isExpanded: function (code) { return EXPANDED.has(code); },
