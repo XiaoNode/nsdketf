@@ -63,6 +63,7 @@ def verified_premiums(info, through_date):
               if daily_update.is_valid_date(item.get('date'))}
     navs = {item['date']: item.get('value') for item in info.get('nav') or []
             if daily_update.is_valid_date(item.get('date'))}
+    price_days = sorted(prices)
     verified = {}
     for record in info.get('premium') or []:
         day = record.get('date')
@@ -71,7 +72,12 @@ def verified_premiums(info, through_date):
             continue
         if not daily_update.is_valid_date(nav_day):
             continue
-        if nav_day < daily_update.previous_trading_day(day) or nav_day > day:
+        # Previous **observed** trading day (holiday-aware via the price series
+        # itself); fall back to the weekday calendar when history is too short.
+        earlier = [d for d in price_days if d < day]
+        prev_day = (max(earlier) if earlier
+                    else daily_update.previous_trading_day(day))
+        if nav_day < prev_day or nav_day > day:
             continue
         try:
             premium = float(record['value'])

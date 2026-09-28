@@ -220,49 +220,43 @@ def previous_trading_day(date_str):
 
 
 def normalize_group_premiums(all_data, codes):
-    """Recompute premiums using the latest common NAV date for the group.
+    """Recompute premiums against each fund's own latest published NAV.
 
-    QDII ETF NAVs are published at different times across fund companies.  For a
-    cross-ETF comparison chart, using the newest per-fund NAV for each price date
-    can make some funds appear to jump while others still use an older NAV.  This
-    function finds the latest NAV date that is available for **all** funds in the
-    group and uses that date for the tail of the premium series so the displayed
-    series share a uniform NAV cutoff.  Earlier dates continue to use the latest
-    available NAV per fund.
+    QDII ETF NAVs are published at different times across fund companies, so
+    every fund uses its newest NAV (<= the price date).  A fund that publishes
+    late therefore no longer drags the whole group onto an older NAV (previously
+    a single laggard forced every fund's tail premium onto the group's latest
+    *common* NAV date).
 
-    If the newest common NAV is older than the previous trading day for the
-    latest price date, the latest price date's premium is dropped rather than
-    shown with a stale NAV.  This prevents QDII ETFs from displaying a T-day
-    premium computed from a T-2 (or earlier) NAV simply because some funds have
-    not yet published T-1 NAV.
+    The latest price date's premium is dropped when the fund's newest NAV is
+    older than the previous **observed** trading day.  Observed trading days
+    come from the price series itself, so market holidays (e.g. Mid-Autumn on a
+    Friday, when neither prices nor NAVs exist) do not cause the newest premium
+    to be discarded as "stale".  This prevents QDII ETFs from displaying a
+    T-day premium computed from a T-2 (or earlier) NAV.
     """
     if not codes:
         return
 
-    nav_date_sets = []
-    for code in codes:
-        dates = {item['date'] for item in all_data.get(code, {}).get('nav', [])
-                 if is_valid_date(item.get('date'))}
-        nav_date_sets.append(dates)
-
-    common_dates = set.intersection(*nav_date_sets)
-    if not common_dates:
-        return
-
-    common_date = max(common_dates)
-
+    trading_days = set()
     latest_price_date = None
     for code in codes:
         info = all_data.get(code)
-        if info and info.get('price'):
-            candidate = max(p['date'] for p in info['price'])
+        if not info:
+            continue
+        dates = [p['date'] for p in info.get('price', [])
+                 if is_valid_date(p.get('date'))]
+        trading_days.update(dates)
+        if dates:
+            candidate = max(dates)
             if latest_price_date is None or candidate > latest_price_date:
                 latest_price_date = candidate
+
+    expected_nav_date = None
     if latest_price_date:
-        expected_nav_date = previous_trading_day(latest_price_date)
-        stale_tail = common_date < expected_nav_date
-    else:
-        stale_tail = False
+        earlier = [d for d in trading_days if d < latest_price_date]
+        expected_nav_date = (max(earlier) if earlier
+                             else previous_trading_day(latest_price_date))
 
     for code in codes:
         info = all_data.get(code)
@@ -270,25 +264,22 @@ def normalize_group_premiums(all_data, codes):
             continue
 
         nav_dict = {item['date']: item['value'] for item in info.get('nav', [])}
-        price_arr = info.get('price', [])
         premium_arr = []
         rejected = []
 
-        for price in price_arr:
+        for price in info.get('price', []):
             pdate = price['date']
             pval = price['value']
 
-            if pdate > common_date:
-                ndate = common_date
-            else:
-                valid = [d for d in nav_dict if d <= pdate]
-                if not valid:
-                    continue
-                ndate = max(valid)
+            valid = [d for d in nav_dict if d <= pdate]
+            if not valid:
+                continue
+            ndate = max(valid)
 
-            if stale_tail and pdate == latest_price_date and ndate < expected_nav_date:
+            if (expected_nav_date and pdate == latest_price_date
+                    and ndate < expected_nav_date):
                 print(f"    [Warning] {code}: latest price date {pdate} expects NAV "
-                      f"{expected_nav_date}, but newest common NAV is {common_date}; "
+                      f">= {expected_nav_date}, but newest NAV is {ndate}; "
                       "dropping stale premium")
                 continue
 

@@ -132,6 +132,78 @@ class TrackingErrorTests(unittest.TestCase):
         self.assertIsNone(daily_update.compute_period_return(series, 5))
 
 
+class NormalizeGroupPremiumsTests(unittest.TestCase):
+    def test_latest_premium_survives_market_holiday(self):
+        # 2026-09-25 (周五) 为市场假日：无价格、无净值。最新价 9-28 应允许
+        # 使用 9-24 净值（前一个真实交易日），而不是被周末日历误判为陈旧丢弃。
+        all_data = {
+            'sz159501': {
+                'price': [
+                    {'date': '2026-09-23', 'value': 2.219},
+                    {'date': '2026-09-24', 'value': 2.212},
+                    {'date': '2026-09-28', 'value': 2.214},
+                ],
+                'nav': [
+                    {'date': '2026-09-23', 'value': 1.9247},
+                    {'date': '2026-09-24', 'value': 1.9257},
+                ],
+                'premium': [],
+            },
+        }
+
+        daily_update.normalize_group_premiums(all_data, ['sz159501'])
+
+        latest = all_data['sz159501']['premium'][-1]
+        self.assertEqual(latest['date'], '2026-09-28')
+        self.assertEqual(latest['nav_date'], '2026-09-24')
+        self.assertEqual(latest['value'], round((2.214 / 1.9257 - 1) * 100, 4))
+
+    def test_laggard_nav_does_not_drag_group_to_older_nav(self):
+        # 一只基金净值披露滞后（只有 9-23），不应拖累其他基金用更旧的净值。
+        all_data = {
+            'sz159501': {
+                'price': [{'date': '2026-09-24', 'value': 2.212}],
+                'nav': [
+                    {'date': '2026-09-23', 'value': 1.9247},
+                    {'date': '2026-09-24', 'value': 1.9257},
+                ],
+                'premium': [],
+            },
+            'sh513110': {
+                'price': [{'date': '2026-09-24', 'value': 2.5}],
+                'nav': [{'date': '2026-09-23', 'value': 2.3528}],
+                'premium': [],
+            },
+        }
+
+        daily_update.normalize_group_premiums(all_data, ['sz159501', 'sh513110'])
+
+        premium = all_data['sz159501']['premium'][-1]
+        self.assertEqual(premium['nav_date'], '2026-09-24')
+        self.assertEqual(premium['value'], round((2.212 / 1.9257 - 1) * 100, 4))
+        laggard = all_data['sh513110']['premium'][-1]
+        self.assertEqual(laggard['nav_date'], '2026-09-23')
+
+    def test_truly_stale_latest_premium_is_dropped(self):
+        # 最新价 9-28 但净值只到 9-23（早于前一真实交易日 9-24）-> 仍应丢弃。
+        all_data = {
+            'sz159501': {
+                'price': [
+                    {'date': '2026-09-24', 'value': 2.212},
+                    {'date': '2026-09-28', 'value': 2.214},
+                ],
+                'nav': [{'date': '2026-09-23', 'value': 1.9247}],
+                'premium': [],
+            },
+        }
+
+        daily_update.normalize_group_premiums(all_data, ['sz159501'])
+
+        dates = [p['date'] for p in all_data['sz159501']['premium']]
+        self.assertNotIn('2026-09-28', dates)
+        self.assertIn('2026-09-24', dates)
+
+
 class UpdateFailureTests(unittest.TestCase):
     def test_main_does_not_write_when_any_fund_fails(self):
         failed_result = {
