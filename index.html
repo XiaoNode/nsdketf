@@ -457,7 +457,7 @@ function renderSidebar(){
     item.dataset.code=code;
     const priceHtml=price!==null?`<div class="etf-price" style="color:${color}">&#165;${price.toFixed(3)}</div>`:'';
     const quotaHtml=isOtc?(etf.purchase_status?`<span class="tag ${etf.purchase_limit===null?'tag-fee-high':'tag-fee'}">${etf.purchase_status}${etf.purchase_limit!==null?' '+etf.purchase_limit+'元':''}</span>`:'<span class="tag">额度待查</span>'):'';
-    const premHtml=prem!==null?`<span class="etf-premium-badge ${premiumBadgeClass(prem)}" title="使用净值日期 ${premRecord.nav_date||premRecord.date}">${prem>0?'+':''}${prem.toFixed(2)}%</span>`:'';
+    const premHtml=prem!==null?`<span class="etf-premium-badge ${premiumBadgeClass(prem)}" title="同日单位净值溢价；价格/净值日期 ${premRecord.nav_date||premRecord.date}，非IOPV溢价">${prem>0?'+':''}${prem.toFixed(2)}%</span>`:'';
     item.innerHTML=`<div class="check-wrap"><input type="checkbox" data-code="${code}" ${isSelected?'checked':''}></div>
       <div style="display:flex;align-items:center;gap:8px;margin-right:24px">
         <div style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0"></div>
@@ -574,9 +574,9 @@ function renderPremiumTab(){
   document.getElementById('chartArea').innerHTML=
     renderRangeBtns(currentRange)+
     '<div class="alert-warn"><span>&#9888;</span>溢价 &gt; 1% 时慎买，折价 &lt; -1% 时为买入机会。QDII ETF因额度限制有时长期处于溢价。</div>'+
-    '<div class="chart-card"><h3>折溢价率走势</h3><div class="chart-desc">溢价率 = (市价 - 净值) / 净值 &#215; 100%，正值=溢价，负值=折价</div><div class="chart-wrapper"><canvas id="chartPremium"></canvas></div></div>'+
+    '<div class="chart-card"><h3>折溢价率走势（同日单位净值）</h3><div class="chart-desc">收盘价 ÷ 同一日期已披露的基金单位净值 − 1；净值尚未公布的交易日不显示，公布后日更自动补算。非盘中/收盘 IOPV 溢价；正值=溢价，负值=折价。</div><div class="chart-wrapper"><canvas id="chartPremium"></canvas></div></div>'+
     '<div class="chart-card"><h3>折溢价统计对比（'+(currentRange==='3m'?'近3个月':currentRange==='6m'?'近6个月':currentRange==='1y'?'近1年':'全部')+'）</h3><div class="chart-desc">最新值 / 均值 / 最高最低</div>'+
-    '<table class="premium-table"><thead><tr><th>基金</th><th>最新溢价率</th><th>使用净值日期</th><th>区间均值</th><th>区间最高</th><th>区间最低</th></tr></thead><tbody>'+trs+'</tbody></table></div>';
+    '<table class="premium-table"><thead><tr><th>基金</th><th>最近已核实溢价率</th><th>价格/净值日期</th><th>区间均值</th><th>区间最高</th><th>区间最低</th></tr></thead><tbody>'+trs+'</tbody></table></div>';
   bindRangeBtns();
   const {allDates,datasets}=buildDatasets('premium');
   makeLineChart('chartPremium',allDates,datasets,v=>v!=null?v.toFixed(3)+'%':'-');
