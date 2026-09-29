@@ -23,13 +23,13 @@ class AlertTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.state = self.root / '.github' / 'premium-alert-state.json'
         self.now = datetime(2026, 9, 23, 22, 30, tzinfo=BJ)
-        self.write_funds({'etf_all.json': (4.9999, '2026-09-23', '2026-09-22')})
+        self.write_funds({'etf_all.json': (4.9999, '2026-09-23', '2026-09-23')})
 
     def write_funds(self, overrides=None):
         overrides = overrides or {}
         for i, (_, filename) in enumerate(premium_alert.GROUPS):
             value, price_date, nav_date = overrides.get(
-                filename, (6.0, '2026-09-23', '2026-09-22'))
+                filename, (6.0, '2026-09-23', '2026-09-23'))
             data = {f'sh50000{i}': {
                 'name': f'基金{i}',
                 'price': [{'date': price_date, 'value': 1 + value / 100}],
@@ -38,16 +38,20 @@ class AlertTests(unittest.TestCase):
             }}
             (self.root / filename).write_text(json.dumps(data), encoding='utf-8')
 
+    def test_cross_date_nav_is_not_verified_even_when_formula_matches(self):
+        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-22')})
+        self.assertEqual(premium_alert.select_candidates(self.root, '2026-09-23'), [])
+
     def test_any_one_below_five_is_selected(self):
         items = premium_alert.select_candidates(self.root, '2026-09-23')
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]['premium'], 4.9999)
 
     def test_high_premium_ranking_in_same_email(self):
-        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-22'),
-                          'sp500_all.json': (12.0, '2026-09-23', '2026-09-22'),
-                          'us50_all.json': (8.0, '2026-09-23', '2026-09-22'),
-                          'djia_all.json': (5.0, '2026-09-23', '2026-09-22')})
+        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-23'),
+                          'sp500_all.json': (12.0, '2026-09-23', '2026-09-23'),
+                          'us50_all.json': (8.0, '2026-09-23', '2026-09-23'),
+                          'djia_all.json': (5.0, '2026-09-23', '2026-09-23')})
         ranked = premium_alert.select_ranked_funds(self.root, '2026-09-23')
         self.assertEqual([item['premium'] for item in ranked], [12.0, 8.0, 5.0, 4.0])
         candidates = premium_alert.select_candidates(self.root, '2026-09-23')
@@ -66,9 +70,9 @@ class AlertTests(unittest.TestCase):
         self.assertIn('近1个月均值', html_body)
 
     def test_ranking_excludes_stale_and_unverified_funds(self):
-        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-22'),
+        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-23'),
                           'sp500_all.json': (12.0, '2026-09-22', '2026-09-21'),
-                          'us50_all.json': (8.0, '2026-09-23', '2026-09-22')})
+                          'us50_all.json': (8.0, '2026-09-23', '2026-09-23')})
         file = self.root / 'us50_all.json'
         data = json.loads(file.read_text(encoding='utf-8'))
         next(iter(data.values()))['price'][0]['value'] = 1.09
@@ -99,7 +103,7 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(comparison['averages'][12], (3.75, 4))
         item = {'group': '纳斯达克100', 'name': '示例', 'code': 'sz000001',
                 'premium': 1.0, 'price_date': '2026-09-23',
-                'nav_date': '2026-09-22', 'comparison': comparison}
+                'nav_date': '2026-09-23', 'comparison': comparison}
         body = premium_alert.build_message([item], '2026-09-23',
                                            ENV['ALERT_TO_EMAIL'], ENV['ALERT_SMTP_USER']).get_body(preferencelist=('plain',)).get_content()
         self.assertIn('上一有效交易日：+3.0000% (2026-09-22)', body)
@@ -109,7 +113,7 @@ class AlertTests(unittest.TestCase):
         self.assertIn('近1年平均：+3.7500%（4个有效交易日）', body)
 
     def test_invalid_history_and_insufficient_periods(self):
-        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-22')})
+        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-23')})
         data_file = self.root / 'etf_all.json'
         data = json.loads(data_file.read_text(encoding='utf-8'))
         info = next(iter(data.values()))
@@ -124,7 +128,7 @@ class AlertTests(unittest.TestCase):
                             {'date': '2026-09-18', 'value': 1.0}])
         data_file.write_text(json.dumps(data), encoding='utf-8')
         candidate = premium_alert.select_candidates(self.root, '2026-09-23')[0]
-        self.assertEqual(candidate['comparison']['previous_date'], '2026-09-18')
+        self.assertIsNone(candidate['comparison']['previous_date'])
         self.assertIsNone(candidate['comparison']['averages'][1])
         body = premium_alert.build_message([candidate], '2026-09-23',
                                            ENV['ALERT_TO_EMAIL'], ENV['ALERT_SMTP_USER']).get_body(preferencelist=('plain',)).get_content()
@@ -136,7 +140,7 @@ class AlertTests(unittest.TestCase):
                          '2026-02-28')
 
     def test_exactly_five_is_not_selected(self):
-        self.write_funds({'etf_all.json': (5.0, '2026-09-23', '2026-09-22')})
+        self.write_funds({'etf_all.json': (5.0, '2026-09-23', '2026-09-23')})
         self.assertEqual(premium_alert.select_candidates(self.root, '2026-09-23'), [])
 
     def test_old_price_or_nav_is_rejected(self):
@@ -146,7 +150,7 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(premium_alert.select_candidates(self.root, '2026-09-23'), [])
 
     def test_unverified_premium_is_rejected(self):
-        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-22')})
+        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-23')})
         data_file = self.root / 'etf_all.json'
         data = json.loads(data_file.read_text(encoding='utf-8'))
         first = next(iter(data.values()))
@@ -198,7 +202,7 @@ class AlertTests(unittest.TestCase):
 
     def test_changed_data_refuses_claim(self):
         self.assertTrue(premium_alert.prepare(self.root, self.state, self.now, env=ENV))
-        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-22')})
+        self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-23')})
         self.assertFalse(premium_alert.claim(self.root, self.state, self.now, env=ENV))
         self.assertEqual(premium_alert.read_state(self.state)['status'], 'reserved')
 

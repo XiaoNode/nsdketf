@@ -28,7 +28,7 @@ class GeneratedDataTests(unittest.TestCase):
                             premium_dates.append(item['date'])
                             self.assertIn(item['date'], prices)
                             self.assertIn(item['nav_date'], navs)
-                            self.assertLessEqual(item['nav_date'], item['date'])
+                            self.assertEqual(item['nav_date'], item['date'])
                             expected = round(
                                 (prices[item['date']] / navs[item['nav_date']] - 1) * 100,
                                 4,

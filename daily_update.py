@@ -1,5 +1,4 @@
 import argparse
-import bisect
 import copy
 import json
 import math
@@ -228,35 +227,13 @@ def normalize_group_premiums(all_data, codes):
     a single laggard forced every fund's tail premium onto the group's latest
     *common* NAV date).
 
-    The latest price date's premium is dropped when the fund's newest NAV is
-    older than the previous **observed** trading day.  Observed trading days
-    come from the price series itself, so market holidays (e.g. Mid-Autumn on a
-    Friday, when neither prices nor NAVs exist) do not cause the newest premium
-    to be discarded as "stale".  This prevents QDII ETFs from displaying a
-    T-day premium computed from a T-2 (or earlier) NAV.
+    A published unit-NAV premium is final only when price and NAV share the
+    same observation date. QDII NAVs may arrive days after the exchange close;
+    leave that price date without a premium until its own NAV is published.
+    Never silently present an older NAV as a same-day or IOPV premium.
     """
     if not codes:
         return
-
-    trading_days = set()
-    latest_price_date = None
-    for code in codes:
-        info = all_data.get(code)
-        if not info:
-            continue
-        dates = [p['date'] for p in info.get('price', [])
-                 if is_valid_date(p.get('date'))]
-        trading_days.update(dates)
-        if dates:
-            candidate = max(dates)
-            if latest_price_date is None or candidate > latest_price_date:
-                latest_price_date = candidate
-
-    expected_nav_date = None
-    if latest_price_date:
-        earlier = [d for d in trading_days if d < latest_price_date]
-        expected_nav_date = (max(earlier) if earlier
-                             else previous_trading_day(latest_price_date))
 
     for code in codes:
         info = all_data.get(code)
@@ -270,25 +247,15 @@ def normalize_group_premiums(all_data, codes):
         for price in info.get('price', []):
             pdate = price['date']
             pval = price['value']
-
-            valid = [d for d in nav_dict if d <= pdate]
-            if not valid:
-                continue
-            ndate = max(valid)
-
-            if (expected_nav_date and pdate == latest_price_date
-                    and ndate < expected_nav_date):
-                print(f"    [Warning] {code}: latest price date {pdate} expects NAV "
-                      f">= {expected_nav_date}, but newest NAV is {ndate}; "
-                      "dropping stale premium")
+            if pdate not in nav_dict:
                 continue
 
-            nval = nav_dict[ndate]
+            nval = nav_dict[pdate]
             premium = round((pval / nval - 1) * 100, 4)
             if abs(premium) > MAX_ABS_PREMIUM:
                 rejected.append((pdate, premium))
                 continue
-            premium_arr.append({'date': pdate, 'value': premium, 'nav_date': ndate})
+            premium_arr.append({'date': pdate, 'value': premium, 'nav_date': pdate})
 
         info['premium'] = premium_arr
 
@@ -321,15 +288,13 @@ def merge_etf_data(info, prices, navs, replace_all_nav=False):
         for date, value in sorted(nav_dict.items())
     ]
 
-    nav_dates = sorted(nav_dict)
     premium_arr = []
     rejected = []
     for price in price_arr:
         price_date = price['date']
-        nav_index = bisect.bisect_right(nav_dates, price_date) - 1
-        if nav_index < 0:
+        if price_date not in nav_dict:
             continue
-        nav_date = nav_dates[nav_index]
+        nav_date = price_date
         premium = round((price['value'] / nav_dict[nav_date] - 1) * 100, 4)
         if abs(premium) > MAX_ABS_PREMIUM:
             rejected.append((price_date, premium))

@@ -63,7 +63,6 @@ def verified_premiums(info, through_date):
               if daily_update.is_valid_date(item.get('date'))}
     navs = {item['date']: item.get('value') for item in info.get('nav') or []
             if daily_update.is_valid_date(item.get('date'))}
-    price_days = sorted(prices)
     verified = {}
     for record in info.get('premium') or []:
         day = record.get('date')
@@ -72,12 +71,8 @@ def verified_premiums(info, through_date):
             continue
         if not daily_update.is_valid_date(nav_day):
             continue
-        # Previous **observed** trading day (holiday-aware via the price series
-        # itself); fall back to the weekday calendar when history is too short.
-        earlier = [d for d in price_days if d < day]
-        prev_day = (max(earlier) if earlier
-                    else daily_update.previous_trading_day(day))
-        if nav_day < prev_day or nav_day > day:
+        # Final published unit-NAV premium requires matching observation dates.
+        if nav_day != day:
             continue
         try:
             premium = float(record['value'])
@@ -278,7 +273,7 @@ def build_message(candidates, today, recipient, sender, ranked=None):
         f'当日场内ETF溢价从高到低（{len(ranked)}只；仅含当日有效数据）：',
         *ranking, '',
         '历史均值按对应日历区间内的有效交易日等权平均，排除本次收盘日；历史不足完整区间显示数据不足。',
-        '口径：场内收盘价 ÷ 已披露单位净值 − 1；并非实时IOPV溢价。',
+        '口径：场内收盘价 ÷ 同日已披露单位净值 − 1；未披露当日净值则不列入，并非IOPV溢价。',
         '来源：本项目每日更新的收盘价与基金净值；QDII净值存在披露滞后。',
         '仅作关注提醒，不构成投资建议。',
     ])
@@ -294,8 +289,8 @@ def build_message(candidates, today, recipient, sender, ranked=None):
                      + '<thead><tr>' + ''.join(f'<th>{html.escape(label)}</th>' for label in headings)
                      + '</tr></thead><tbody>' + ''.join(table_rows) + '</tbody></table>'
                      + '<p>历史均值按对应日历区间内的有效交易日等权平均，排除本次收盘日；'
-                     + '历史不足完整区间显示数据不足。场内收盘价 ÷ 已披露单位净值 − 1；'
-                     + '并非实时IOPV溢价。仅作关注提醒，不构成投资建议。</p></body></html>')
+                     + '历史不足完整区间显示数据不足。场内收盘价 ÷ 同日已披露单位净值 − 1；'
+                     + '未披露当日净值则不列入，并非IOPV溢价。仅作关注提醒，不构成投资建议。</p></body></html>')
         mail.add_alternative(html_body, subtype='html')
     return mail
 
