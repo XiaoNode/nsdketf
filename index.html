@@ -569,7 +569,10 @@ function renderPremiumTab(){
     const maxStr=maxP!=='-'?'+'+maxP+'%':'-';
     const minStr=minP!=='-'?minP+'%':'-';
     const navDate=premRecord?(premRecord.nav_date||premRecord.date):'-';
-    trs+=`<tr style="${bg}"><td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${COLORS[i%COLORS.length]};margin-right:6px"></span>${etf.name}</td><td class="${premiumClass(prem)}">${latestStr}</td><td>${navDate}</td><td>${avgStr}</td><td class="pos-val">${maxStr}</td><td class="neg-val">${minStr}</td></tr>`;
+    const lastPriceDate=(etf.price&&etf.price.length)?etf.price[etf.price.length-1].date:null;
+    const pendingTag=(lastPriceDate&&premRecord&&lastPriceDate>premRecord.date)
+      ?' <span style="color:#999;font-size:12px" title="'+lastPriceDate+' 收盘价已取得，但该日单位净值尚未披露，故不出点；净值公布后日更自动补算">待净值</span>':'';
+    trs+=`<tr style="${bg}"><td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${COLORS[i%COLORS.length]};margin-right:6px"></span>${etf.name}</td><td class="${premiumClass(prem)}">${latestStr}</td><td>${navDate}${pendingTag}</td><td>${avgStr}</td><td class="pos-val">${maxStr}</td><td class="neg-val">${minStr}</td></tr>`;
   });
   document.getElementById('chartArea').innerHTML=
     renderRangeBtns(currentRange)+
