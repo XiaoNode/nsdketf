@@ -1,11 +1,92 @@
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import daily_update
 
+BJ = timezone(timedelta(hours=8))
 
-class MergeEtfDataTests(unittest.TestCase):
+
+def quote_line(code, stamp, price, rate, iopv, nav):
+    fields = [''] * 90
+    fields[1] = 'Example ETF'
+    fields[3] = str(price)
+    fields[30] = stamp
+    fields[77] = str(rate)
+    fields[78] = str(iopv)
+    fields[81] = str(nav)
+    return f'v_{code}="' + '~'.join(fields) + '";'
+
+
+class IopvQuoteTests(unittest.TestCase):
+    def quote_body(self, **kwargs):
+        defaults = dict(stamp='20261008150000', price=2.213, rate=12.64,
+                        iopv=1.9646, nav=1.9146)
+        defaults.update(kwargs)
+        return quote_line('sz159501', **defaults)
+
+    def test_closing_snapshot_is_parsed_and_verified(self):
+        result = daily_update.parse_iopv_quote(self.quote_body())
+        self.assertEqual(list(result), ['sz159501'])
+        self.assertEqual(result['sz159501']['date'], '2026-10-08')
+        self.assertEqual(result['sz159501']['iopv'], 1.9646)
+        self.assertEqual(result['sz159501']['premium'], round((2.213 / 1.9646 - 1) * 100, 4))
+
+    def test_misaligned_iopv_is_rejected(self):
+        # IOPV 偏离单位净值超过合理区间，说明字段位置可能已变动
+        self.assertEqual(daily_update.parse_iopv_quote(self.quote_body(iopv=9.6)), {})
+
+    def test_quoted_rate_disagreement_is_rejected(self):
+        self.assertEqual(daily_update.parse_iopv_quote(self.quote_body(rate=3.0)), {})
+
+    def test_missing_or_broken_payload_is_rejected(self):
+        self.assertEqual(daily_update.parse_iopv_quote(''), {})
+        self.assertEqual(daily_update.parse_iopv_quote('v_sz159501="a~b~c";'), {})
+
+    def test_intraday_run_collects_nothing(self):
+        with patch.object(daily_update, 'request_with_retry', side_effect=AssertionError('network')):
+            before_close = datetime(2026, 10, 8, 14, 30, tzinfo=BJ)
+            self.assertEqual(daily_update.fetch_iopv_snapshot(['sz159501'], now=before_close), {})
+            self.assertEqual(daily_update.fetch_iopv_snapshot([], now=before_close), {})
+
+    def test_source_failure_returns_empty(self):
+        after_close = datetime(2026, 10, 8, 20, 30, tzinfo=BJ)
+        with patch.object(daily_update, 'request_with_retry', side_effect=OSError('down')):
+            self.assertEqual(daily_update.fetch_iopv_snapshot(['sz159501'], now=after_close), {})
+
+
+class MergeIopvTests(unittest.TestCase):
+    def info(self):
+        return {
+            'name': 'Example ETF',
+            'price': [{'date': '2026-10-08', 'value': 2.213}],
+            'nav': [{'date': '2026-09-29', 'value': 1.9146}],
+            'premium': [],
+        }
+
+    def test_snapshot_is_stored_once_per_date(self):
+        record = {'date': '2026-10-08', 'iopv': 1.9646, 'price': 2.213, 'premium': 12.6402}
+        first = daily_update.merge_iopv_series(self.info(), record, [{'date': '2026-10-08'}])
+        self.assertEqual(first, [{'date': '2026-10-08', 'value': 12.6402, 'iopv': 1.9646}])
+        rows = [{'date': '2026-10-08', 'value': 12.6402, 'iopv': 1.9646}]
+        again = daily_update.merge_iopv_series({'iopv_premium': rows}, record,
+                                               [{'date': '2026-10-08'}])
+        self.assertEqual(again, first)
+
+    def test_stale_snapshot_is_ignored(self):
+        record = {'date': '2026-09-29', 'iopv': 1.9, 'price': 2.2, 'premium': 15.0}
+        result = daily_update.merge_iopv_series(self.info(), record, [{'date': '2026-10-08'}])
+        self.assertEqual(result, [])
+
+    def test_monthly_output_and_change_detection_include_iopv(self):
+        info = self.info()
+        record = {'date': '2026-10-08', 'iopv': 1.9646, 'price': 2.213, 'premium': 12.6402}
+        updated, months, _ = daily_update.merge_etf_data(
+            info, {}, info['nav'] and {item['date']: item['value'] for item in info['nav']},
+            iopv_record=record,
+        )
+        self.assertIn('2026-10', months)
+        self.assertEqual(len(updated['iopv_premium']), 1)
     def test_recent_source_nav_replaces_forward_filled_rows(self):
         info = {
             'name': 'Example ETF',

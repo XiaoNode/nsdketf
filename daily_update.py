@@ -31,6 +31,20 @@ FUND_PERIOD_API = 'https://fundmobapi.eastmoney.com/FundMNewApi/FundMNPeriodIncr
 FUND_TSDATA_URL = 'https://fundf10.eastmoney.com/tsdata_{code}.html'
 # 天天基金详情 JS（含完整复权净值序列，用于交叉校验区间涨幅）
 FUND_PINGZHONG_URL = 'https://fund.eastmoney.com/pingzhongdata/{code}.js'
+# 腾讯 ETF 实时行情快照（含 IOPV，免登录)。一次请求可批量取多只。
+# 字段位置无官方文档，取值前一律做合理性校验。
+IOPV_QUOTE_API = 'https://qt.gtimg.cn/q='
+IOPV_QUOTE_TIME_FIELD = 30
+IOPV_QUOTE_RATE_FIELD = 77
+IOPV_QUOTE_VALUE_FIELD = 78
+IOPV_QUOTE_NAV_FIELD = 81
+# IOPV 溢价只在收盘后记录：盘中快照是瞬时值，不是当日收盘口径
+IOPV_CLOSE_HOUR = 15
+# IOPV 与最新已披露单位净值的合理比值区间，用于拦截字段错位
+IOPV_NAV_RATIO_RANGE = (0.5, 2.0)
+# 自算溢价与行情给出的溢价率允许的最大偏差（百分点）
+IOPV_RATE_TOLERANCE = 0.5
+BEIJING = timezone(timedelta(hours=8))
 # 腾讯美股指数日线（用于交叉校验跟踪误差，免登录且稳定）
 US_INDEX_KLINE_API = 'https://web.ifzq.gtimg.cn/appstock/app/usfqkline/get'
 # 纳指被动基金跟踪的指数在腾讯行情里的代码
@@ -181,9 +195,93 @@ def fetch_price(code, days=DAILY_PRICE_DAYS):
     return request_with_retry(f'Price {code}', load_prices)
 
 
+def parse_iopv_quote(body):
+    """Parse a Tencent quote payload into verified IOPV snapshots by code.
+
+    Tencent publishes no documented layout, so every value is cross-checked:
+    the fund reference NAV (IOPV) must sit in a plausible band around the last
+    published unit NAV, and the recomputed premium must match the exchange
+    premium rate the same record reports. Anything inconsistent is dropped
+    rather than silently written as history.
+    """
+    snapshots = {}
+    if not body or '="' not in body:
+        return snapshots
+    for segment in body.split(';'):
+        if '="' not in segment:
+            continue
+        code = segment.split('=')[0].strip()
+        if code.startswith('v_'):
+            code = code[2:]
+        code = code.strip()
+        payload = segment.split('="', 1)[1].split('"')[0]
+        fields = payload.split('~')
+        if len(fields) <= IOPV_QUOTE_NAV_FIELD:
+            continue
+        stamp = fields[IOPV_QUOTE_TIME_FIELD]
+        if not stamp or len(stamp) < 8:
+            continue
+        date = f'{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]}'
+        if not is_valid_date(date):
+            continue
+        try:
+            price = float(fields[3])
+            rate = float(fields[IOPV_QUOTE_RATE_FIELD])
+            iopv = float(fields[IOPV_QUOTE_VALUE_FIELD])
+            nav = float(fields[IOPV_QUOTE_NAV_FIELD])
+        except (ValueError, TypeError):
+            continue
+        if not all(map(math.isfinite, (price, rate, iopv, nav))) or min(price, iopv, nav) <= 0:
+            continue
+        ratio = iopv / nav
+        if not IOPV_NAV_RATIO_RANGE[0] <= ratio <= IOPV_NAV_RATIO_RANGE[1]:
+            continue
+        premium = round((price / iopv - 1) * 100, 4)
+        if abs(premium) > MAX_ABS_PREMIUM:
+            continue
+        if abs(premium - rate) > IOPV_RATE_TOLERANCE:
+            continue
+        snapshots[code] = {
+            'date': date,
+            'iopv': round(iopv, 4),
+            'price': round(price, 4),
+            'premium': premium,
+        }
+    return snapshots
+
+
+def fetch_iopv_snapshot(codes, now=None):
+    """Closing IOPV premium for on-exchange ETFs, keyed by code.
+
+    Only collected at or after the A-share close: an intraday price/IOPV pair
+    is not the session-close premium. Returns {} before the close or when the
+    source is unavailable so existing history is never overwritten with noise.
+    """
+    local = (now or datetime.now(BEIJING)).astimezone(BEIJING)
+    if not codes or local.hour < IOPV_CLOSE_HOUR:
+        return {}
+    url = IOPV_QUOTE_API + ','.join(codes)
+
+    def load_quotes():
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return resp.read().decode('gbk', 'ignore')
+
+    try:
+        body = request_with_retry('IOPV snapshot', load_quotes)
+    except Exception as exc:
+        print(f'  [IOPV] snapshot unavailable: {exc}')
+        return {}
+    snapshots = parse_iopv_quote(body)
+    missing = [code for code in codes if code not in snapshots]
+    if missing:
+        print(f'  [IOPV] no usable snapshot for: {", ".join(missing)}')
+    return snapshots
+
+
 def changed_data_months(before, after):
     changed = set()
-    for field in ('price', 'nav', 'premium'):
+    for field in ('price', 'nav', 'premium', 'iopv_premium'):
         old_items = before.get(field, [])
         new_items = after.get(field, [])
         months = {
@@ -260,8 +358,12 @@ def normalize_group_premiums(all_data, codes):
         info['premium'] = premium_arr
 
 
-def merge_etf_data(info, prices, navs, replace_all_nav=False):
-    """Merge source data while preserving NAV publication dates."""
+def merge_etf_data(info, prices, navs, replace_all_nav=False, iopv_record=None):
+    """Merge source data while preserving NAV publication dates.
+
+    ``iopv_record`` is one closing snapshot from the quote source; it is stored
+    per trade date so repeated runs stay idempotent.
+    """
     updated = dict(info)
     price_dict = {item['date']: item['value'] for item in info.get('price', [])}
     price_dict.update(prices)
@@ -308,7 +410,33 @@ def merge_etf_data(info, prices, navs, replace_all_nav=False):
     updated['price'] = price_arr
     updated['nav'] = nav_arr
     updated['premium'] = premium_arr
+    updated['iopv_premium'] = merge_iopv_series(info, iopv_record, price_arr)
     return updated, changed_data_months(info, updated), rejected
+
+
+def merge_iopv_series(info, record, price_arr):
+    """Append/overwrite one closing IOPV premium row keyed by trade date.
+
+    A snapshot older than the newest price date means a halted fund or a stale
+    quote line; it never becomes history.
+    """
+    rows = {
+        item['date']: item
+        for item in info.get('iopv_premium') or []
+        if is_valid_date(item.get('date'))
+    }
+    if record and is_valid_date(record.get('date')):
+        newest_price = price_arr[-1]['date'] if price_arr else None
+        if newest_price and record['date'] >= newest_price:
+            rows[record['date']] = {
+                'date': record['date'],
+                'value': record['premium'],
+                'iopv': record['iopv'],
+            }
+        else:
+            print(f'    [IOPV] ignored snapshot {record["date"]} older than '
+                  f'newest price {newest_price}')
+    return [rows[date] for date in sorted(rows)]
 
 
 def update_html_scripts(month, prefix):
@@ -715,7 +843,7 @@ def update_ndx_passive_performance(json_file='ndx_passive_all.json'):
     return all_data, changed
 
 
-def prepare_update(codes, json_file, full_nav=False):
+def prepare_update(codes, json_file, full_nav=False, now=None):
     json_path = os.path.join(DIR, json_file)
     with open(json_path, 'r', encoding='utf-8') as f:
         all_data = json.load(f)
@@ -723,6 +851,10 @@ def prepare_update(codes, json_file, full_nav=False):
     original_all_data = copy.deepcopy(all_data)
     failures = []
     print(f'\n>>> Preparing {json_file} ({len(codes)} ETFs)...')
+    # One batched request per group; empty before the A-share close.
+    iopv_snapshots = fetch_iopv_snapshot(codes, now=now)
+    if iopv_snapshots:
+        print(f'  [IOPV] captured {len(iopv_snapshots)} closing snapshots')
     for code in codes:
         info = all_data.get(code)
         if not info:
@@ -737,7 +869,8 @@ def prepare_update(codes, json_file, full_nav=False):
             else:
                 navs = fetch_nav(code)
             updated, _, rejected = merge_etf_data(
-                info, prices, navs, replace_all_nav=full_nav
+                info, prices, navs, replace_all_nav=full_nav,
+                iopv_record=iopv_snapshots.get(code)
             )
             all_data[code] = updated
             for date, premium in rejected:
@@ -776,6 +909,8 @@ def write_update(result, prefix):
                             if item['date'].startswith(month)],
                 'nav': [item for item in info.get('nav', [])
                         if item['date'].startswith(month)],
+                'iopv_premium': [item for item in info.get('iopv_premium', [])
+                                 if item['date'].startswith(month)],
             }
 
         if not any(subset[code].get('price') or subset[code].get('nav') for code in subset):

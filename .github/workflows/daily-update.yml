@@ -7,7 +7,9 @@ on:
     # 净值陆续披露后补齐溢价率。各轮幂等 —— 数据无变化时不会 commit, 也不会触发 Pages 部署。
     # 分钟数刻意取 :20 而非整点/半点: Actions 调度高峰在整点, 错开可明显减少排队时间。
     # 限定 UTC 周一至周五 (对应北京周一晚 ~ 周六凌晨), 周末与美股休市不空跑。
-    # 北京 16:40 —— 提前首跑: 收盘后尽早拿当日行情, 配合 20:20 主力前出第一版数据
+    # 北京 15:15 —— 收盘快照: 刚收盘即取当日收盘价与当日 IOPV，IOPV 口径溢价当天入库
+    - cron: '15 7 * * 1-5'
+    # 北京 16:40 —— 提前首跑: 收盘后尽早拿当日收盘价, 配合 20:20 主力前出第一版数据
     - cron: '40 8 * * 1-5'
     # 北京 20:20 —— 主力前补: 当日收盘价已出, 早披露的净值一并收入
     - cron: '20 12 * * 1-5'
@@ -57,7 +59,7 @@ jobs:
       - name: Validate generated data
         run: python -m unittest discover -s tests -v
 
-      - name: Reserve daily low-premium email
+      - name: Reserve daily premium email
         id: alert
         run: python premium_alert.py prepare
         env:
@@ -86,9 +88,11 @@ jobs:
           git commit -m "chore: auto-update ETF data [$(date +'%Y-%m-%d %Z')]"
           git push
 
-      # 在 SMTP 之前持久化一次发送尝试：失败不重试，以严格保证同日不发第二封。
+      # 在 SMTP 之前持久化一次发送尝试：失败不重试，以严格保证同一数据日不发第二封。
+      # 邮件不再要求当日数据有变化：净值延迟或休市后补发时同样要送到。
+      # 去重改由 premium-alert-state.json 里的数据日(price_date)保证。
       - name: Claim low-premium email attempt
-        if: steps.alert.outputs.send == 'true' && steps.verify.outputs.changed == 'true'
+        if: steps.alert.outputs.send == 'true'
         id: claim_alert
         run: python premium_alert.py claim
         env:
