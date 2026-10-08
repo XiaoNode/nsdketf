@@ -195,6 +195,7 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
 <script src="data/etf_data_2026-07.js"></script>
 <script src="data/etf_data_2026-08.js"></script>
 <script src="data/etf_data_2026-09.js"></script>
+<script src="data/etf_data_2026-10.js"></script>
     <script src="data/etf_data_2023-08.js"></script>
     <script src="data/etf_data_2022-10.js"></script>
     <script src="data/etf_data_2024-02.js"></script>
@@ -248,6 +249,7 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
 <script src="data/sp500_data_2026-07.js"></script>
 <script src="data/sp500_data_2026-08.js"></script>
 <script src="data/sp500_data_2026-09.js"></script>
+<script src="data/sp500_data_2026-10.js"></script>
     <script src="data/sp500_data_2023-08.js"></script>
     <script src="data/sp500_data_2022-10.js"></script>
     <script src="data/sp500_data_2024-02.js"></script>
@@ -282,6 +284,7 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
 <script src="data/us50_data_2026-07.js"></script>
 <script src="data/us50_data_2026-08.js"></script>
 <script src="data/us50_data_2026-09.js"></script>
+<script src="data/us50_data_2026-10.js"></script>
 <script src="data/djia_data_2026-01.js"></script>
 <script src="data/djia_data_2026-02.js"></script>
 <script src="data/djia_data_2026-03.js"></script>
@@ -291,6 +294,7 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
 <script src="data/djia_data_2026-07.js"></script>
 <script src="data/djia_data_2026-08.js"></script>
 <script src="data/djia_data_2026-09.js"></script>
+<script src="data/djia_data_2026-10.js"></script>
 <script src="data/ndx_passive_data_2026-09.js"></script>
 <script src="data/ndx_passive_data_2026-08.js"></script>
 <script src="data/ndx_passive_data_2026-07.js"></script>
@@ -418,6 +422,13 @@ function filterByRange(arr,range){
 }
 function getLatestPremiumRecord(code){const a=ETF_DATA_ACTIVE[code].premium;return(!a||!a.length)?null:a[a.length-1];}
 function getLatestPremium(code){const r=getLatestPremiumRecord(code);return r===null?null:r.value;}
+function getLatestIopvRecord(code){const a=ETF_DATA_ACTIVE[code].iopv_premium;return(!a||!a.length)?null:a[a.length-1];}
+function getLatestIopv(code){const r=getLatestIopvRecord(code);return r===null?null:r.value;}
+function displayPremium(code){
+  const iopv=getLatestIopvRecord(code);const nav=getLatestPremiumRecord(code);
+  if(iopv&&(!nav||iopv.date>=nav.date))return iopv.value;
+  return nav?nav.value:null;
+}
 function getLatestPrice(code){const a=ETF_DATA_ACTIVE[code].price;return(!a||!a.length)?null:a[a.length-1].value;}
 function getLatestDate(key){
   let latest='';
@@ -431,6 +442,7 @@ let LAST_UPDATE_NOTE='';
 function updateFreshness(){
   const isOtc=currentIndex==='ndx_passive';
   let s=isOtc?'数据截止: 净值 '+getLatestDate('nav'):'数据截止: 价格 '+getLatestDate('price')+' · 净值 '+getLatestDate('nav');
+  if(!isOtc){const iopvLatest=getLatestDate('iopv_premium');if(iopvLatest&&iopvLatest!=='未知')s+=' · IOPV '+iopvLatest;}
   if(LAST_UPDATE_NOTE) s+=' · '+LAST_UPDATE_NOTE;
   document.getElementById('updateTime').textContent=s;
 }
@@ -441,7 +453,7 @@ function feeColor(f){if(f<=0.60)return'#22c55e';if(f<=0.65)return'#84cc16';if(f<
 function renderSidebar(){
   const c=document.getElementById('etfList');c.innerHTML='';
   const rankingExclusions=PREMIUM_RANKING_EXCLUSIONS[currentIndex]||new Set();
-  const currentPremiums=ETF_CODES.filter(code=>!rankingExclusions.has(code)).map(code=>getLatestPremium(code)).filter(value=>value!==null&&Number.isFinite(value));
+  const currentPremiums=ETF_CODES.filter(code=>!rankingExclusions.has(code)).map(code=>displayPremium(code)).filter(value=>value!==null&&Number.isFinite(value));
   const highestPremium=currentPremiums.length?Math.max(...currentPremiums):null;
   const lowestPremium=currentPremiums.length?Math.min(...currentPremiums):null;
   ETF_CODES.forEach((code,i)=>{
@@ -451,13 +463,19 @@ function renderSidebar(){
     const isSelected=selectedCodes.has(code);const color=COLORS[i%COLORS.length];
     const feeTag=etf.fee_total<=0.60?'tag-fee-low':etf.fee_total>=1.0?'tag-fee-high':'tag-fee';
     const excludedHtml=rankingExclusions.has(code)?'<span class="tag rank-excluded">不参与排名</span>':'';
-    const extremeHtml=!isOtc&&!rankingExclusions.has(code)&&(prem===highestPremium?'<span class="tag extreme-high">溢价最高</span>':prem===lowestPremium?'<span class="tag extreme-low">溢价最低</span>':'');
+    const extremeHtml=!isOtc&&!rankingExclusions.has(code)&&(shownPrem===highestPremium?'<span class="tag extreme-high">溢价最高</span>':shownPrem===lowestPremium?'<span class="tag extreme-low">溢价最低</span>':'');
     const item=document.createElement('div');
     item.className='etf-item'+(isSelected?' active':'');
     item.dataset.code=code;
     const priceHtml=price!==null?`<div class="etf-price" style="color:${color}">&#165;${price.toFixed(3)}</div>`:'';
     const quotaHtml=isOtc?(etf.purchase_status?`<span class="tag ${etf.purchase_limit===null?'tag-fee-high':'tag-fee'}">${etf.purchase_status}${etf.purchase_limit!==null?' '+etf.purchase_limit+'元':''}</span>`:'<span class="tag">额度待查</span>'):'';
-    const premHtml=prem!==null?`<span class="etf-premium-badge ${premiumBadgeClass(prem)}" title="同日单位净值溢价；价格/净值日期 ${premRecord.nav_date||premRecord.date}，非IOPV溢价">${prem>0?'+':''}${prem.toFixed(2)}%</span>`:'';
+    const iopvRecord=isOtc?null:getLatestIopvRecord(code);const iopv=iopvRecord===null?null:iopvRecord.value;
+    const shownPrem=(iopv!==null&&(!premRecord||iopvRecord.date>=premRecord.date))?iopv:prem;
+    const premTitle=[];
+    if(iopv!==null)premTitle.push('IOPV口径(同券商App) '+(iopv>0?'+':'')+iopv.toFixed(2)+'% @'+iopvRecord.date);
+    if(prem!==null)premTitle.push('单位净值口径 '+(prem>0?'+':'')+prem.toFixed(2)+'% @'+(premRecord.nav_date||premRecord.date));
+    premTitle.push('IOPV=交易所实时参考净值(当日可得)，NAV=已披露单位净值(T+1~T+2)，两者口径不同');
+    const premHtml=shownPrem!==null?`<span class="etf-premium-badge ${premiumBadgeClass(shownPrem)}" title="${premTitle.join('；')}">${shownPrem>0?'+':''}${shownPrem.toFixed(2)}%</span>`:'';
     item.innerHTML=`<div class="check-wrap"><input type="checkbox" data-code="${code}" ${isSelected?'checked':''}></div>
       <div style="display:flex;align-items:center;gap:8px;margin-right:24px">
         <div style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0"></div>
@@ -529,7 +547,7 @@ function buildDatasets(key){
   const result=[];
   Array.from(selectedCodes).forEach(code=>{
     const etf=ETF_DATA_ACTIVE[code];const color=COLORS[ETF_CODES.indexOf(code)%COLORS.length];
-    const filtered=filterByRange(etf[key],currentRange);
+    const filtered=filterByRange(etf[key]||[],currentRange);
     result.push({label:etf.name,rawData:filtered,color});
   });
   const allDates=[...new Set(result.flatMap(d=>d.rawData.map(p=>p.date)))].sort();
@@ -569,20 +587,31 @@ function renderPremiumTab(){
     const maxStr=maxP!=='-'?'+'+maxP+'%':'-';
     const minStr=minP!=='-'?minP+'%':'-';
     const navDate=premRecord?(premRecord.nav_date||premRecord.date):'-';
+    const iopvRecord=getLatestIopvRecord(code);
+    const iopvStr=iopvRecord?(iopvRecord.value>0?'+':'')+iopvRecord.value.toFixed(4)+'%':'-';
+    const iopvDate=iopvRecord?iopvRecord.date:'-';
     const lastPriceDate=(etf.price&&etf.price.length)?etf.price[etf.price.length-1].date:null;
     const pendingTag=(lastPriceDate&&premRecord&&lastPriceDate>premRecord.date)
       ?' <span style="color:#999;font-size:12px" title="'+lastPriceDate+' 收盘价已取得，但该日单位净值尚未披露，故不出点；净值公布后日更自动补算">待净值</span>':'';
-    trs+=`<tr style="${bg}"><td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${COLORS[i%COLORS.length]};margin-right:6px"></span>${etf.name}</td><td class="${premiumClass(prem)}">${latestStr}</td><td>${navDate}${pendingTag}</td><td>${avgStr}</td><td class="pos-val">${maxStr}</td><td class="neg-val">${minStr}</td></tr>`;
+    trs+=`<tr style="${bg}"><td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${COLORS[i%COLORS.length]};margin-right:6px"></span>${etf.name}</td><td class="${premiumClass(iopvRecord?iopvRecord.value:null)}">${iopvStr}</td><td>${iopvDate}</td><td class="${premiumClass(prem)}">${latestStr}</td><td>${navDate}${pendingTag}</td><td>${avgStr}</td><td class="pos-val">${maxStr}</td><td class="neg-val">${minStr}</td></tr>`;
   });
   document.getElementById('chartArea').innerHTML=
     renderRangeBtns(currentRange)+
     '<div class="alert-warn"><span>&#9888;</span>溢价 &gt; 1% 时慎买，折价 &lt; -1% 时为买入机会。QDII ETF因额度限制有时长期处于溢价。</div>'+
-    '<div class="chart-card"><h3>折溢价率走势（同日单位净值）</h3><div class="chart-desc">收盘价 ÷ 同一日期已披露的基金单位净值 − 1；净值尚未公布的交易日不显示，公布后日更自动补算。非盘中/收盘 IOPV 溢价；正值=溢价，负值=折价。</div><div class="chart-wrapper"><canvas id="chartPremium"></canvas></div></div>'+
-    '<div class="chart-card"><h3>折溢价统计对比（'+(currentRange==='3m'?'近3个月':currentRange==='6m'?'近6个月':currentRange==='1y'?'近1年':'全部')+'）</h3><div class="chart-desc">最新值 / 均值 / 最高最低</div>'+
-    '<table class="premium-table"><thead><tr><th>基金</th><th>最近已核实溢价率</th><th>价格/净值日期</th><th>区间均值</th><th>区间最高</th><th>区间最低</th></tr></thead><tbody>'+trs+'</tbody></table></div>';
+    '<div class="chart-card"><h3>折溢价率走势（IOPV 口径 · 同券商 App / 雪球）</h3><div class="chart-desc">当日收盘价 ÷ 当日交易所发布的基金份额参考净值（IOPV）− 1。IOPV 跟随标的指数实时更新，收盘即定格，当日可得，但属参考值。</div><div class="chart-wrapper"><canvas id="chartIopv"></canvas></div></div>'+
+    '<div class="chart-card"><h3>折溢价率走势（已披露单位净值口径）</h3><div class="chart-desc">收盘价 ÷ 同一日期已披露的基金单位净值 − 1。QDII 单位净值 T+1~T+2 披露，未披露的交易日不显示，公布后日更自动补算；历史更长、可审计，但滞后。</div><div class="chart-wrapper"><canvas id="chartPremium"></canvas></div></div>'+
+    '<div class="chart-card"><h3>折溢价统计对比（'+(currentRange==='3m'?'近3个月':currentRange==='6m'?'近6个月':currentRange==='1y'?'近1年':'全部')+'）</h3><div class="chart-desc">单位净值口径的区间统计；IOPV 历史自 2026-10-08 起积累，暂不足完整区间</div>'+
+    '<table class="premium-table"><thead><tr><th>基金</th><th>IOPV 溢价（同 App）</th><th>IOPV 日期</th><th>单位净值溢价</th><th>价格/净值日期</th><th>区间均值</th><th>区间最高</th><th>区间最低</th></tr></thead><tbody>'+trs+'</tbody></table></div>';
   bindRangeBtns();
   const {allDates,datasets}=buildDatasets('premium');
   makeLineChart('chartPremium',allDates,datasets,v=>v!=null?v.toFixed(3)+'%':'-');
+  const {allDates:iDates,datasets:iSets}=buildDatasets('iopv_premium');
+  if(iDates.length&&iSets.some(d=>d.data.some(v=>v!==null))){
+    makeLineChart('chartIopv',iDates,iSets,v=>v!=null?v.toFixed(3)+'%':'-');
+  }else{
+    const wrap=document.getElementById('chartIopv').parentElement;
+    wrap.innerHTML='<p style="color:#888;font-size:13px;margin:0;padding:8px 0">IOPV 历史自 2026-10-08 开始积累，请在每个交易日收盘后随日更自动填充。</p>';
+  }
 }
 
 function passiveSortValue(etf,key){
