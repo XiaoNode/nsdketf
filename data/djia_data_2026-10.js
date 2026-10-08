@@ -1,0 +1,1 @@
+const DJIA_DATA_202610 = {"sh513400": {"code": "sh513400", "name": "鹏华道琼斯工业平均ETF(QDII)", "fee_total": 0.65, "fee_mgmt": 0.5, "fee_cust": 0.15, "fee_svc": 0.0, "size": "36.86", "iopv_premium": [{"date": "2026-10-08", "value": 2.5253, "iopv": 1.2553}], "price": [{"date": "2026-10-08", "value": 1.287}], "premium": [], "nav": []}};
