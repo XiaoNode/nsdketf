@@ -463,7 +463,6 @@ function renderSidebar(){
     const isSelected=selectedCodes.has(code);const color=COLORS[i%COLORS.length];
     const feeTag=etf.fee_total<=0.60?'tag-fee-low':etf.fee_total>=1.0?'tag-fee-high':'tag-fee';
     const excludedHtml=rankingExclusions.has(code)?'<span class="tag rank-excluded">不参与排名</span>':'';
-    const extremeHtml=!isOtc&&!rankingExclusions.has(code)&&(shownPrem===highestPremium?'<span class="tag extreme-high">溢价最高</span>':shownPrem===lowestPremium?'<span class="tag extreme-low">溢价最低</span>':'');
     const item=document.createElement('div');
     item.className='etf-item'+(isSelected?' active':'');
     item.dataset.code=code;
@@ -471,6 +470,7 @@ function renderSidebar(){
     const quotaHtml=isOtc?(etf.purchase_status?`<span class="tag ${etf.purchase_limit===null?'tag-fee-high':'tag-fee'}">${etf.purchase_status}${etf.purchase_limit!==null?' '+etf.purchase_limit+'元':''}</span>`:'<span class="tag">额度待查</span>'):'';
     const iopvRecord=isOtc?null:getLatestIopvRecord(code);const iopv=iopvRecord===null?null:iopvRecord.value;
     const shownPrem=(iopv!==null&&(!premRecord||iopvRecord.date>=premRecord.date))?iopv:prem;
+    const extremeHtml=!isOtc&&!rankingExclusions.has(code)&&(shownPrem===highestPremium?'<span class="tag extreme-high">溢价最高</span>':shownPrem===lowestPremium?'<span class="tag extreme-low">溢价最低</span>':'');
     const premTitle=[];
     if(iopv!==null)premTitle.push('IOPV口径(同券商App) '+(iopv>0?'+':'')+iopv.toFixed(2)+'% @'+iopvRecord.date);
     if(prem!==null)premTitle.push('单位净值口径 '+(prem>0?'+':'')+prem.toFixed(2)+'% @'+(premRecord.nav_date||premRecord.date));
