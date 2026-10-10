@@ -179,7 +179,15 @@ def fetch_nav(code, days=DAILY_NAV_DAYS, start_date=None):
 
 
 def fetch_price(code, days=DAILY_PRICE_DAYS):
-    """Fetch recent unadjusted market closing prices from Sina."""
+    """Fetch recent unadjusted market closing prices with fallback sources.
+    
+    Primary: Sina K-line API (stable, long history, no login).
+    Fallback: Tencent quote snapshot (field [3] = latest close, single point only).
+    
+    Single-point fallback ensures at least today's close can be captured when
+    Sina is down, preventing global update abort. Historical backfill waits
+    until primary recovers.
+    """
     params = urllib.parse.urlencode({
         'symbol': code,
         'scale': 240,
@@ -203,7 +211,21 @@ def fetch_price(code, days=DAILY_PRICE_DAYS):
             parsed[date] = parse_positive_number(item.get('close'), 'price', code)
         return parsed
 
-    return request_with_retry(f'Price {code}', load_prices)
+    try:
+        return request_with_retry(f'Price {code}', load_prices)
+    except Exception as primary_error:
+        # Fallback: extract today's close from IOPV snapshot (field [3]).
+        # Returns single-day dict; prior stored prices survive merge_etf_data.
+        print(f'    [Price fallback] Sina unavailable ({primary_error}), trying Tencent snapshot')
+        try:
+            snapshot_body = fetch_iopv_snapshot([code], now=datetime.now(BEIJING))
+            if code in snapshot_body:
+                snap = snapshot_body[code]
+                return {snap['date']: snap['price']}
+        except Exception as fallback_error:
+            print(f'    [Price fallback] Tencent snapshot also failed: {fallback_error}')
+        # Both failed: re-raise primary error so caller sees root cause
+        raise primary_error
 
 
 def parse_iopv_quote(body):
@@ -267,9 +289,16 @@ def fetch_iopv_snapshot(codes, now=None):
     Only collected at or after the A-share close: an intraday price/IOPV pair
     is not the session-close premium. Returns {} before the close or when the
     source is unavailable so existing history is never overwritten with noise.
+    
+    Time window: Beijing 15:00 (close) to 23:00 same day. This prevents:
+    - Premature collection when Actions schedule drifts early (common 20~45min)
+    - Stale snapshot reuse when a next-morning catch-up run sees yesterday's quote
     """
     local = (now or datetime.now(BEIJING)).astimezone(BEIJING)
-    if not codes or local.hour < IOPV_CLOSE_HOUR:
+    if not codes:
+        return {}
+    # Reject before close or after same-day cutoff (next morning belongs to new session)
+    if local.hour < IOPV_CLOSE_HOUR or local.hour >= 23:
         return {}
     url = IOPV_QUOTE_API + ','.join(codes)
 

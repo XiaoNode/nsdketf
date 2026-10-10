@@ -184,11 +184,16 @@ def select_board(root, price_date, limit=TOP_COUNT):
 
 
 def latest_verified_date(root):
-    """Most recent date carrying verified same-day premiums in any group.
+    """Most recent date carrying verified premiums in any group and any series.
 
-    QDII NAV publication lags, especially around holidays. Anchoring the digest
-    to real data instead of the calendar keeps an undiscovered-session (for
-    example the last session before a long holiday) from being skipped forever.
+    Prefers IOPV-series dates (same-day, no NAV dependency) over unit-NAV dates
+    so the digest anchor can advance immediately after a session close, even when
+    QDII NAV publication lags multiple days. This prevents long-holiday scenarios
+    where the anchor gets stuck pre-holiday while post-holiday prices accumulate
+    unreported.
+    
+    Returns the latest date across all funds and both premium series (iopv_premium
+    and premium), ensuring every collected session eventually gets reported.
     """
     latest = None
     for _, filename in GROUPS:
@@ -200,6 +205,7 @@ def latest_verified_date(root):
         except (ValueError, OSError):
             continue
         for info in data.values():
+            # Check IOPV series first (same-day availability)
             for key in PREMIUM_SERIES:
                 for day in verified_series(info, '9999-12-31', key):
                     if latest is None or day > latest:
