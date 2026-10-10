@@ -141,6 +141,97 @@ class MergeIopvTests(unittest.TestCase):
         self.assertEqual(rejected, [('2022-07-04', 297.8638)])
 
 
+class IopvEstimateTests(unittest.TestCase):
+    """Historical closing-IOPV estimation from NAV x index drift."""
+
+    def info(self):
+        return {
+            'name': 'Example ETF',
+            'price': [
+                {'date': '2026-01-02', 'value': 1.10},
+                {'date': '2026-01-05', 'value': 1.20},
+            ],
+            'nav': [{'date': '2026-01-01', 'value': 1.0}],
+            'premium': [],
+            'iopv_premium': [],
+        }
+
+    def closes(self):
+        # US sessions: 12-31 (ends Beijing 01-01), 01-01 (ends 01-02),
+        # 01-02 (ends 01-03, covers Beijing Monday 01-05 as well).
+        return {'2025-12-31': 1000.0, '2026-01-01': 1010.0, '2026-01-02': 1030.0}
+
+    def test_estimate_follows_index_drift(self):
+        estimates = daily_update.estimate_iopv_history(self.info(), self.closes())
+        # 01-02: est IOPV = 1.0 * 1010/1000 = 1.01 -> premium = 1.10/1.01 - 1
+        # 01-05: est IOPV = 1.0 * 1030/1000 = 1.03 -> premium = 1.20/1.03 - 1
+        self.assertEqual([(e['date'], e['value']) for e in estimates], [
+            ('2026-01-02', round((1.10 / 1.01 - 1) * 100, 4)),
+            ('2026-01-05', round((1.20 / 1.03 - 1) * 100, 4)),
+        ])
+        self.assertTrue(all(item['estimated'] for item in estimates))
+
+    def test_missing_index_history_yields_no_estimate(self):
+        self.assertEqual(daily_update.estimate_iopv_history(self.info(), {}), [])
+
+    def test_implausible_estimate_is_rejected(self):
+        info = self.info()
+        info['price'] = [{'date': '2026-01-02', 'value': 99.0}]
+        estimates = daily_update.estimate_iopv_history(info, self.closes())
+        self.assertEqual(estimates, [])
+
+    def test_real_records_win_after_calibration(self):
+        info = self.info()
+        info['iopv_premium'] = [{'date': '2026-01-05', 'value': 9.9}]
+        daily_update.apply_iopv_estimates({'x': info}, ['x'], self.closes())
+        dates = [item['date'] for item in info['iopv_premium_est']]
+        self.assertEqual(dates, ['2026-01-02'])
+        self.assertNotIn('iopv_est_bias', info)
+
+    def test_bias_calibration_activates_after_threshold(self):
+        real = {f'2026-02-{day:02d}': 10.0 for day in range(1, 13)}
+        days = ([f'2026-01-{day:02d}' for day in range(28, 32)]
+                + [f'2026-02-{day:02d}' for day in range(1, 16)])
+        info = {
+            'name': 'Example ETF',
+            'price': [{'date': day, 'value': 1.11} for day in days],
+            'nav': [{'date': '2026-01-27', 'value': 1.0}],
+            'premium': [],
+            'iopv_premium': [{'date': day, 'value': value}
+                             for day, value in real.items()],
+        }
+        closes = {'2026-01-26': 100.0}
+        closes.update({day: 100.0 for day in days})
+        # Raw estimate premium = 1.11/1.0 - 1 = 11% on every day; real = 10%.
+        daily_update.apply_iopv_estimates({'x': info}, ['x'], closes)
+        self.assertEqual(info['iopv_est_bias'], {'bias': 1.0, 'samples': 12})
+        kept = {item['date']: item['value']
+                for item in info['iopv_premium_est']}
+        self.assertEqual(sorted(kept), sorted(
+            day for day in days if day not in real))
+        self.assertTrue(all(abs(value - 10.0) < 1e-9
+                            for value in kept.values()))
+
+    def test_calibration_stays_off_below_threshold(self):
+        real = {f'2026-02-{day:02d}': 10.0 for day in range(1, 5)}
+        days = ([f'2026-01-{day:02d}' for day in range(28, 32)]
+                + [f'2026-02-{day:02d}' for day in range(1, 6)])
+        info = {
+            'name': 'Example ETF',
+            'price': [{'date': day, 'value': 1.11} for day in days],
+            'nav': [{'date': '2026-01-27', 'value': 1.0}],
+            'premium': [],
+            'iopv_premium': [{'date': day, 'value': value}
+                             for day, value in real.items()],
+        }
+        closes = {'2026-01-26': 100.0}
+        closes.update({day: 100.0 for day in days})
+        daily_update.apply_iopv_estimates({'x': info}, ['x'], closes)
+        self.assertNotIn('iopv_est_bias', info)
+        self.assertTrue(all(item['value'] == round((1.11 - 1) * 100, 4)
+                            for item in info['iopv_premium_est']))
+
+
 class FetchNavTests(unittest.TestCase):
     def test_full_nav_fetch_continues_after_a_twenty_record_page(self):
         first_page = [

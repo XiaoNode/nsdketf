@@ -1,4 +1,5 @@
 import argparse
+import bisect
 import copy
 import json
 import math
@@ -49,6 +50,16 @@ BEIJING = timezone(timedelta(hours=8))
 US_INDEX_KLINE_API = 'https://web.ifzq.gtimg.cn/appstock/app/usfqkline/get'
 # 纳指被动基金跟踪的指数在腾讯行情里的代码
 TRACK_INDEX_KLINE_SYMBOL = 'usNDX'
+# 各场内分组估算历史 IOPV 所用的标的指数（腾讯行情代码）。
+# MSCI美国50 在腾讯无对应指数，用标普500代理（成分高度重叠，日收益相关性 >0.98）。
+GROUP_INDEX_SYMBOLS = {
+    'etf_all.json': 'usNDX',
+    'sp500_all.json': 'us.INX',
+    'us50_all.json': 'us.INX',
+    'djia_all.json': 'usDJI',
+}
+# 估算 IOPV 与实测 IOPV 的重叠样本达到该数量后，才启用系统偏差校准
+IOPV_EST_BIAS_MIN_SAMPLES = 10
 # 区间涨幅字段 -> (移动端 title, 自然年跨度)
 PERIOD_RETURN_FIELDS = (
     ('ret_1y', '1N', 1),
@@ -281,7 +292,7 @@ def fetch_iopv_snapshot(codes, now=None):
 
 def changed_data_months(before, after):
     changed = set()
-    for field in ('price', 'nav', 'premium', 'iopv_premium'):
+    for field in ('price', 'nav', 'premium', 'iopv_premium', 'iopv_premium_est'):
         old_items = before.get(field, [])
         new_items = after.get(field, [])
         months = {
@@ -723,6 +734,101 @@ def fetch_us_index_closes(symbol=TRACK_INDEX_KLINE_SYMBOL, count=1200):
     return request_with_retry(f'index kline {symbol}', load)
 
 
+def _last_close_before(sorted_dates, closes, day):
+    """Latest US session date strictly before Beijing ``day`` (US session U
+    ends Beijing morning of U+1, so a session is complete for Beijing day X
+    iff its US date U < X)."""
+    pos = bisect.bisect_left(sorted_dates, day)
+    return sorted_dates[pos - 1] if pos > 0 else None
+
+
+def estimate_iopv_history(info, index_closes):
+    """Estimate closing-IOPV premiums for every price day of one fund.
+
+    Model: IOPV(T) ≈ NAV_D × index(us_T) / index(us_D), where D is the
+    latest NAV date <= T and us_X is the latest US session strictly before
+    Beijing day X.  Days that already carry a real IOPV record are kept
+    here so ``calibrate_iopv_estimates`` can measure the gap; the caller
+    drops them before publishing.  Ignores FX moves and the persistent
+    NAV-vs-IOPV basket gap; the latter is what the bias calibration tracks.
+    """
+    prices = sorted(
+        (p['date'], p['value']) for p in info.get('price', [])
+        if is_valid_date(p.get('date'))
+    )
+    nav_items = sorted(
+        (n['date'], n['value']) for n in info.get('nav', [])
+        if is_valid_date(n.get('date'))
+    )
+    if not prices or not nav_items:
+        return []
+    nav_dates = [item[0] for item in nav_items]
+    index_dates = sorted(index_closes)
+    estimates = []
+    for price_date, price in prices:
+        nav_index = bisect.bisect_right(nav_dates, price_date) - 1
+        if nav_index < 0:
+            continue
+        nav_date, nav = nav_items[nav_index]
+        us_t = _last_close_before(index_dates, index_closes, price_date)
+        us_d = _last_close_before(index_dates, index_closes, nav_date)
+        if us_t is None or us_d is None:
+            continue
+        est_iopv = nav * index_closes[us_t] / index_closes[us_d]
+        if est_iopv <= 0 or nav <= 0:
+            continue
+        premium = (price / est_iopv - 1) * 100
+        if abs(premium) > MAX_ABS_PREMIUM:
+            continue
+        estimates.append(
+            {'date': price_date, 'value': round(premium, 4), 'estimated': True}
+        )
+    return estimates
+
+
+def calibrate_iopv_estimates(info, estimates):
+    """Subtract the median estimate-vs-real gap once overlap is sufficient.
+
+    Returns ``(bias, samples)``; bias is None below the sample threshold.
+    """
+    real = {item['date']: item['value'] for item in info.get('iopv_premium', [])
+            if is_valid_date(item.get('date'))}
+    diffs = sorted(
+        item['value'] - real[item['date']] for item in estimates
+        if item['date'] in real
+    )
+    if len(diffs) < IOPV_EST_BIAS_MIN_SAMPLES:
+        return None, len(diffs)
+    mid = len(diffs) // 2
+    bias = diffs[mid] if len(diffs) % 2 else (diffs[mid - 1] + diffs[mid]) / 2
+    for item in estimates:
+        item['value'] = round(item['value'] - bias, 4)
+    return round(bias, 4), len(diffs)
+
+
+def apply_iopv_estimates(all_data, codes, index_closes):
+    """Attach ``iopv_premium_est`` (and bias metadata) to each fund.
+
+    Real IOPV records always win: days covered by a snapshot are removed
+    from the estimated series after calibration has measured the gap.
+    """
+    for code in codes:
+        info = all_data.get(code)
+        if not info:
+            continue
+        estimates = estimate_iopv_history(info, index_closes)
+        bias, samples = calibrate_iopv_estimates(info, estimates)
+        real_days = {item['date'] for item in info.get('iopv_premium', [])
+                     if is_valid_date(item.get('date'))}
+        estimates = [item for item in estimates
+                     if item['date'] not in real_days]
+        if bias is None:
+            info.pop('iopv_est_bias', None)
+        else:
+            info['iopv_est_bias'] = {'bias': bias, 'samples': samples}
+        info['iopv_premium_est'] = estimates
+
+
 def compute_tracking_error(fund_series, index_closes, years=1):
     """Annualised tracking error from daily fund-vs-index return differences."""
     end_date = max(fund_series)
@@ -879,6 +985,17 @@ def prepare_update(codes, json_file, full_nav=False, now=None):
             failures.append(f'{code}: {exc}')
 
     normalize_group_premiums(all_data, codes)
+
+    # Historical closing-IOPV estimates (real snapshot records always win).
+    symbol = GROUP_INDEX_SYMBOLS.get(json_file)
+    if symbol:
+        try:
+            index_closes = fetch_us_index_closes(symbol)
+            print(f'  [IOPV est] index {symbol}: {len(index_closes)} sessions')
+            apply_iopv_estimates(all_data, codes, index_closes)
+        except Exception as exc:
+            print(f'  [IOPV est] index {symbol} unavailable, keep previous: {exc}')
+
     changed_months = changed_data_months_all(original_all_data, all_data)
 
     return {
@@ -911,6 +1028,8 @@ def write_update(result, prefix):
                         if item['date'].startswith(month)],
                 'iopv_premium': [item for item in info.get('iopv_premium', [])
                                  if item['date'].startswith(month)],
+                'iopv_premium_est': [item for item in info.get('iopv_premium_est', [])
+                                     if item['date'].startswith(month)],
             }
 
         if not any(subset[code].get('price') or subset[code].get('nav') for code in subset):
