@@ -532,7 +532,7 @@ function makeLineChart(canvasId,labels,datasets,yFmt){
       plugins:{
         legend:{labels:{color:'#8892a4',font:{size:12},boxWidth:12,padding:16}},
         tooltip:{backgroundColor:'#1a1d27',borderColor:'#2e3248',borderWidth:1,titleColor:'#e2e8f0',bodyColor:'#8892a4',padding:10,
-          callbacks:{label:c=>` ${c.dataset.label}: ${yFmt(c.parsed.y)}`}},
+          callbacks:{label:c=>` ${c.dataset.label}: ${yFmt(c.parsed.y,c.label)}`}},
         zoom:{zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'},pan:{enabled:true,mode:'x'}}
       },
       scales:{
@@ -543,6 +543,25 @@ function makeLineChart(canvasId,labels,datasets,yFmt){
   });
 }
 
+function buildIopvDatasets(){
+  const result=[];const estDates=new Set();
+  Array.from(selectedCodes).forEach(code=>{
+    const etf=ETF_DATA_ACTIVE[code];const color=COLORS[ETF_CODES.indexOf(code)%COLORS.length];
+    const real=etf.iopv_premium||[];const est=etf.iopv_premium_est||[];
+    const rmap=Object.fromEntries(real.map(p=>[p.date,p.value]));
+    const emap=Object.fromEntries(est.filter(p=>!(p.date in rmap)).map(p=>[p.date,p.value]));
+    const merged=[...new Set([...Object.keys(rmap),...Object.keys(emap)])].sort()
+      .map(d=>({date:d,value:rmap[d]??emap[d],estimated:!(d in rmap)}));
+    filterByRange(merged,currentRange).forEach(p=>{if(p.estimated)estDates.add(p.date);});
+    result.push({label:etf.name,rawData:filterByRange(merged,currentRange),color});
+  });
+  const allDates=[...new Set(result.flatMap(d=>d.rawData.map(p=>p.date)))].sort();
+  const datasets=result.map(d=>{
+    const map=Object.fromEntries(d.rawData.map(p=>[p.date,p.value]));
+    return{label:d.label,data:allDates.map(dt=>map[dt]??null),borderColor:d.color,backgroundColor:d.color+'12',borderWidth:1.8,pointRadius:0,tension:0.3,spanGaps:true};
+  });
+  return{allDates,datasets,estDates};
+}
 function buildDatasets(key){
   const result=[];
   Array.from(selectedCodes).forEach(code=>{
@@ -598,19 +617,19 @@ function renderPremiumTab(){
   document.getElementById('chartArea').innerHTML=
     renderRangeBtns(currentRange)+
     '<div class="alert-warn"><span>&#9888;</span>溢价 &gt; 1% 时慎买，折价 &lt; -1% 时为买入机会。QDII ETF因额度限制有时长期处于溢价。</div>'+
-    '<div class="chart-card"><h3>折溢价率走势（IOPV 口径 · 同券商 App / 雪球）</h3><div class="chart-desc">当日收盘价 ÷ 当日交易所发布的基金份额参考净值（IOPV）− 1。IOPV 跟随标的指数实时更新，收盘即定格，当日可得，但属参考值。</div><div class="chart-wrapper"><canvas id="chartIopv"></canvas></div></div>'+
+    '<div class="chart-card"><h3>折溢价率走势（IOPV 口径 · 同券商 App / 雪球）</h3><div class="chart-desc">收盘价 ÷ 当日交易所发布的基金份额参考净值（IOPV）− 1。自 2026-10-08 起为每日收盘实测值；此前历史为估算值（悬浮标注「估算」）：估算 IOPV ≈ 最近已披露单位净值 × 标的指数区间涨跌（美国50 以标普500代理，未含汇率影响），实测积累 ≥10 日后自动校准系统偏差，估算段仅供参考。</div><div class="chart-wrapper"><canvas id="chartIopv"></canvas></div></div>'+
     '<div class="chart-card"><h3>折溢价率走势（已披露单位净值口径）</h3><div class="chart-desc">收盘价 ÷ 同一日期已披露的基金单位净值 − 1。QDII 单位净值 T+1~T+2 披露，未披露的交易日不显示，公布后日更自动补算；历史更长、可审计，但滞后。</div><div class="chart-wrapper"><canvas id="chartPremium"></canvas></div></div>'+
-    '<div class="chart-card"><h3>折溢价统计对比（'+(currentRange==='3m'?'近3个月':currentRange==='6m'?'近6个月':currentRange==='1y'?'近1年':'全部')+'）</h3><div class="chart-desc">单位净值口径的区间统计；IOPV 历史自 2026-10-08 起积累，暂不足完整区间</div>'+
+    '<div class="chart-card"><h3>折溢价统计对比（'+(currentRange==='3m'?'近3个月':currentRange==='6m'?'近6个月':currentRange==='1y'?'近1年':'全部')+'）</h3><div class="chart-desc">区间均值/最高/最低按已披露单位净值口径统计；「IOPV 溢价」列为最近实测值（非估算）</div>'+
     '<table class="premium-table"><thead><tr><th>基金</th><th>IOPV 溢价（同 App）</th><th>IOPV 日期</th><th>单位净值溢价</th><th>价格/净值日期</th><th>区间均值</th><th>区间最高</th><th>区间最低</th></tr></thead><tbody>'+trs+'</tbody></table></div>';
   bindRangeBtns();
   const {allDates,datasets}=buildDatasets('premium');
   makeLineChart('chartPremium',allDates,datasets,v=>v!=null?v.toFixed(3)+'%':'-');
-  const {allDates:iDates,datasets:iSets}=buildDatasets('iopv_premium');
+  const {allDates:iDates,datasets:iSets,estDates:iEst}=buildIopvDatasets();
   if(iDates.length&&iSets.some(d=>d.data.some(v=>v!==null))){
-    makeLineChart('chartIopv',iDates,iSets,v=>v!=null?v.toFixed(3)+'%':'-');
+    makeLineChart('chartIopv',iDates,iSets,(v,date)=>v==null?'-':v.toFixed(3)+'%'+(iEst.has(date)?'（估算）':''));
   }else{
     const wrap=document.getElementById('chartIopv').parentElement;
-    wrap.innerHTML='<p style="color:#888;font-size:13px;margin:0;padding:8px 0">IOPV 历史自 2026-10-08 开始积累，请在每个交易日收盘后随日更自动填充。</p>';
+    wrap.innerHTML='<p style="color:#888;font-size:13px;margin:0;padding:8px 0">暂无 IOPV 数据，请在每个交易日收盘后随日更自动填充。</p>';
   }
 }
 
