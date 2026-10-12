@@ -1,24 +1,43 @@
-# 备份目录（已删除文件的本地备份，不入库）
-_backup_*/
-
-# Python 缓存
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+*.so
 .Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# 虚拟环境
-venv/
-.venv/
-env/
+# 本地测试文件
+test_*.json
+local_*.py
 
-# 系统文件
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
 Thumbs.db
 
-# 编辑器
-.vscode/
-.idea/
-
-# 智能体内部内存/产物（不入库）
-.workbuddy/
+# 敏感信息（避免意外提交）
+secrets.json
+credentials.json
+*.pem
+*.key
+_backup_local/
