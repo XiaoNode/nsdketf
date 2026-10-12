@@ -157,11 +157,12 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
   </div>
   <div class="main" data-page-node-id="sn1TCH8xhf2XphsM2qHtDf">
     <div class="tabs" data-page-node-id="rB36IDfEvkJ7JDuaJIPE9n">
-      <div class="tab active" data-tab="price" data-page-node-id="3tKSyCDWZjXGDLU8vCnLJ2">&#128200; 价格走势</div>
-      <div class="tab" data-tab="premium" data-page-node-id="ex62YFH5KasXwSwH7pO1XS">&#128260; 折溢价率</div>
-      <div class="tab" data-tab="nav" data-page-node-id="pRuMldUngJLVSeY5bxzEWQ">&#128176; 净值走势</div>
-      <div class="tab" data-tab="info" data-page-node-id="KwG1Rss0NQ6a7jzCpAWxWv">&#128203; 基金信息</div>
-      <div class="tab" data-tab="valuation" id="tabValuation" data-page-node-id="5vpvCly9bR5FcFxAw5ag9L">&#128202; 估值参考</div>
+      <div class="tab active" data-tab="price" data-page-node-id="3tKSyCDWZjXGDLU8vCnLJ2">📈 价格走势</div>
+      <div class="tab" data-tab="premium" data-page-node-id="ex62YFH5KasXwSwH7pO1XS">📊 折溢价率</div>
+      <div class="tab" data-tab="nav" data-page-node-id="pRuMldUngJLVSeY5bxzEWQ">💰 净值走势</div>
+      <div class="tab" data-tab="info" data-page-node-id="KwG1Rss0NQ6a7jzCpAWxWv">📋 基金信息</div>
+      <div class="tab" data-tab="tools" data-page-node-id="toolsTab">🧮 决策工具</div>
+      <div class="tab" data-tab="valuation" id="tabValuation" data-page-node-id="5vpvCly9bR5FcFxAw5ag9L">📊 估值参考</div>
     </div>
     <div class="chart-area" id="chartArea" data-page-node-id="KbLSEDbGgSmrSh4MGU43uo"></div>
   </div>
@@ -450,6 +451,38 @@ function premiumClass(v){if(v===null)return'zero-val';if(v>0.5)return'pos-val';i
 function premiumBadgeClass(v){if(v===null)return'premium-zero';if(v>0.5)return'premium-pos';if(v<-0.5)return'premium-neg';return'premium-zero';}
 function feeColor(f){if(f<=0.60)return'#22c55e';if(f<=0.65)return'#84cc16';if(f<=0.80)return'#f59e0b';return'#ef4444';}
 
+// === 新增：历史溢价分位数计算 ===
+function calculatePercentile(arr, value) {
+  if (!arr || arr.length === 0) return null;
+  const sorted = arr.slice().sort((a, b) => a - b);
+  let count = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    if (sorted[i] < value) count++;
+    else break;
+  }
+  return (count / sorted.length) * 100;
+}
+
+function getPremiumPercentile(code, months = 12) {
+  const premData = ETF_DATA_ACTIVE[code]?.iopv_premium || ETF_DATA_ACTIVE[code]?.premium;
+  if (!premData || premData.length === 0) return null;
+  
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - months);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  
+  const recentPremiums = premData
+    .filter(d => d.date >= cutoffStr && d.value !== null && Number.isFinite(d.value))
+    .map(d => d.value);
+  
+  if (recentPremiums.length < 10) return null; // 数据不足
+  
+  const currentPrem = displayPremium(code);
+  if (currentPrem === null) return null;
+  
+  return calculatePercentile(recentPremiums, currentPrem);
+}
+
 function renderSidebar(){
   const c=document.getElementById('etfList');c.innerHTML='';
   const rankingExclusions=PREMIUM_RANKING_EXCLUSIONS[currentIndex]||new Set();
@@ -475,6 +508,18 @@ function renderSidebar(){
     if(iopv!==null)premTitle.push('IOPV口径(同券商App) '+(iopv>0?'+':'')+iopv.toFixed(2)+'% @'+iopvRecord.date);
     if(prem!==null)premTitle.push('单位净值口径 '+(prem>0?'+':'')+prem.toFixed(2)+'% @'+(premRecord.nav_date||premRecord.date));
     premTitle.push('IOPV=交易所实时参考净值(当日可得)，NAV=已披露单位净值(T+1~T+2)，两者口径不同');
+    
+    // 新增：溢价分位数
+    const percentile = !isOtc ? getPremiumPercentile(code, 12) : null;
+    let percentileHtml = '';
+    if (percentile !== null && shownPrem !== null) {
+      let pctColor = '#8892a4';
+      let pctLabel = '中位';
+      if (percentile < 25) { pctColor = '#22c55e'; pctLabel = '低位'; }
+      else if (percentile > 75) { pctColor = '#ef4444'; pctLabel = '高位'; }
+      percentileHtml = `<span class="tag" style="background:rgba(136,146,164,.12);color:${pctColor};font-weight:600" title="当前溢价在近1年数据中的分位：${percentile.toFixed(0)}%。<25%为低位买入区，>75%为高溢价风险区">近1年 ${percentile.toFixed(0)}% 分位 · ${pctLabel}</span>`;
+    }
+    
     const premHtml=shownPrem!==null?`<span class="etf-premium-badge ${premiumBadgeClass(shownPrem)}" title="${premTitle.join('；')}">${shownPrem>0?'+':''}${shownPrem.toFixed(2)}%</span>`:'';
     item.innerHTML=`<div class="check-wrap"><input type="checkbox" data-code="${code}" ${isSelected?'checked':''}></div>
       <div style="display:flex;align-items:center;gap:8px;margin-right:24px">
@@ -482,7 +527,7 @@ function renderSidebar(){
         <div><div class="etf-name">${etf.name}</div><div class="etf-code">${code.toUpperCase()}${etf.share_code?' / '+etf.share_code:''}</div></div>
       </div>
       ${priceHtml}
-      <div class="etf-tags"><span class="tag ${feeTag}">${etf.fee_total}%/年</span>${premHtml}${quotaHtml}${excludedHtml}${extremeHtml}</div>`;
+      <div class="etf-tags"><span class="tag ${feeTag}">${etf.fee_total}%/年</span>${premHtml}${percentileHtml}${quotaHtml}${excludedHtml}${extremeHtml}</div>`;
     item.addEventListener('click',e=>{if(e.target.type==='checkbox')return;toggleSelect(code);});
     item.querySelector('input[type=checkbox]').addEventListener('change',e=>{
       if(e.target.checked)selectedCodes.add(code);else selectedCodes.delete(code);renderAll();
@@ -509,6 +554,7 @@ function renderAll(){
   else if(currentTab==='premium')renderPremiumTab();
   else if(currentTab==='nav')renderNavTab();
   else if(currentTab==='info')renderInfoTab();
+  else if(currentTab==='tools')renderToolsTab();
   else if(currentTab==='valuation')renderValuationTab();
 }
 function renderRangeBtns(active){
@@ -819,6 +865,274 @@ fetch('data/_last_update.json').then(r=>r.ok?r.json():null).then(d=>{
     updateFreshness();
   }
 }).catch(()=>{});
+
+// === 新增：决策工具函数 ===
+// 1. 定投计算器
+function calculateDCA() {
+  const code = document.getElementById('dcaFund').value;
+  const startMonth = document.getElementById('dcaStart').value;
+  const monthlyAmount = parseFloat(document.getElementById('dcaAmount').value);
+  
+  const priceData = ETF_DATA_ACTIVE[code].price || [];
+  const startDate = startMonth + '-01';
+  const monthlyPrices = [];
+  
+  // 按月采样（每月第一个交易日）
+  let lastMonth = '';
+  priceData.forEach(d => {
+    const month = d.date.slice(0, 7);
+    if (month >= startMonth && month !== lastMonth) {
+      monthlyPrices.push({date: d.date, price: d.value});
+      lastMonth = month;
+    }
+  });
+  
+  if (monthlyPrices.length < 2) {
+    document.getElementById('dcaResult').innerHTML = '<div class="alert-warn" style="margin-top:12px"><span>⚠</span>数据不足，无法计算</div>';
+    return;
+  }
+  
+  let totalInvest = 0;
+  let totalShares = 0;
+  monthlyPrices.forEach(d => {
+    totalInvest += monthlyAmount;
+    totalShares += monthlyAmount / d.price;
+  });
+  
+  const latestPrice = monthlyPrices[monthlyPrices.length - 1].price;
+  const currentValue = totalShares * latestPrice;
+  const profit = currentValue - totalInvest;
+  const profitRate = (profit / totalInvest) * 100;
+  
+  // 计算年化收益率
+  const months = monthlyPrices.length;
+  const years = months / 12;
+  const annualizedReturn = years > 0 ? (Math.pow(currentValue / totalInvest, 1 / years) - 1) * 100 : 0;
+  
+  // 对比一次性投入
+  const lumpSum = monthlyAmount * months;
+  const firstPrice = monthlyPrices[0].price;
+  const lumpSumShares = lumpSum / firstPrice;
+  const lumpSumValue = lumpSumShares * latestPrice;
+  const lumpSumProfit = lumpSumValue - lumpSum;
+  const lumpSumRate = (lumpSumProfit / lumpSum) * 100;
+  
+  document.getElementById('dcaResult').innerHTML = `
+    <div class="info-grid" style="margin-top:12px">
+      <div class="info-card">
+        <div class="card-header"><div class="card-name">定投结果</div></div>
+        <div class="metric"><span class="metric-label">定投期数</span><span class="metric-value">${months} 期</span></div>
+        <div class="metric"><span class="metric-label">累计投入</span><span class="metric-value">¥${totalInvest.toFixed(2)}</span></div>
+        <div class="metric"><span class="metric-label">持有份额</span><span class="metric-value">${totalShares.toFixed(2)}</span></div>
+        <div class="metric"><span class="metric-label">当前市值</span><span class="metric-value">¥${currentValue.toFixed(2)}</span></div>
+        <div class="metric"><span class="metric-label">盈亏</span><span class="metric-value ${profit >= 0 ? 'pos-val' : 'neg-val'}">${profit >= 0 ? '+' : ''}¥${profit.toFixed(2)} (${profitRate >= 0 ? '+' : ''}${profitRate.toFixed(2)}%)</span></div>
+        <div class="metric"><span class="metric-label">年化收益率</span><span class="metric-value ${annualizedReturn >= 0 ? 'pos-val' : 'neg-val'}">${annualizedReturn >= 0 ? '+' : ''}${annualizedReturn.toFixed(2)}%</span></div>
+      </div>
+      <div class="info-card">
+        <div class="card-header"><div class="card-name">对比：一次性投入</div></div>
+        <div class="metric"><span class="metric-label">首期全投</span><span class="metric-value">¥${lumpSum.toFixed(2)}</span></div>
+        <div class="metric"><span class="metric-label">买入价</span><span class="metric-value">¥${firstPrice.toFixed(3)}</span></div>
+        <div class="metric"><span class="metric-label">持有份额</span><span class="metric-value">${lumpSumShares.toFixed(2)}</span></div>
+        <div class="metric"><span class="metric-label">当前市值</span><span class="metric-value">¥${lumpSumValue.toFixed(2)}</span></div>
+        <div class="metric"><span class="metric-label">盈亏</span><span class="metric-value ${lumpSumProfit >= 0 ? 'pos-val' : 'neg-val'}">${lumpSumProfit >= 0 ? '+' : ''}¥${lumpSumProfit.toFixed(2)} (${lumpSumRate >= 0 ? '+' : ''}${lumpSumRate.toFixed(2)}%)</span></div>
+        <div class="metric"><span class="metric-label">优劣对比</span><span class="metric-value">${profitRate > lumpSumRate ? '定投更优 ' + (profitRate - lumpSumRate).toFixed(2) + '%' : '一次性更优 ' + (lumpSumRate - profitRate).toFixed(2) + '%'}</span></div>
+      </div>
+    </div>
+  `;
+}
+
+// 2. 买入成本计算器
+function calculateCost() {
+  const amount = parseFloat(document.getElementById('costAmount').value);
+  const commissionRate = parseFloat(document.getElementById('costCommission').value);
+  const market = document.getElementById('costMarket').value;
+  
+  // 佣金（最低5元）
+  const commission = Math.max(amount * commissionRate, 5);
+  
+  // 过户费（仅沪市，按成交金额0.002%，最低1元）
+  const transferFee = market === 'sh' ? Math.max(amount * 0.00002, 1) : 0;
+  
+  // 印花税（卖出时才收，买入不收）
+  const stampTax = 0;
+  
+  const totalCost = amount + commission + transferFee + stampTax;
+  const costRate = ((totalCost - amount) / amount) * 100;
+  
+  // 假设持有1/3/5年，计算需涨多少才回本（含管理费损耗）
+  const selectedCode = ETF_CODES[0];
+  const feeRate = ETF_DATA_ACTIVE[selectedCode]?.fee_total || 0.6;
+  
+  const breakEven = (years) => {
+    const feeLoss = feeRate * years;
+    const sellCommission = (amount * (1 + 0.01) * commissionRate); // 假设涨1%后卖出
+    const sellTransfer = market === 'sh' ? amount * (1 + 0.01) * 0.00002 : 0;
+    const sellStamp = amount * (1 + 0.01) * 0.001; // 卖出印花税0.1%
+    const totalSellCost = sellCommission + sellTransfer + sellStamp;
+    return costRate + feeLoss + (totalSellCost / amount) * 100;
+  };
+  
+  document.getElementById('costResult').innerHTML = `
+    <div class="info-grid" style="margin-top:12px">
+      <div class="info-card">
+        <div class="card-header"><div class="card-name">买入成本明细</div></div>
+        <div class="metric"><span class="metric-label">买入金额</span><span class="metric-value">¥${amount.toFixed(2)}</span></div>
+        <div class="metric"><span class="metric-label">券商佣金</span><span class="metric-value">¥${commission.toFixed(2)}</span></div>
+        <div class="metric"><span class="metric-label">过户费</span><span class="metric-value">¥${transferFee.toFixed(2)} ${market === 'sh' ? '(沪市)' : '(深市免)'}</span></div>
+        <div class="metric"><span class="metric-label">印花税</span><span class="metric-value">¥0.00 (买入免)</span></div>
+        <div class="metric"><span class="metric-label">实际扣款</span><span class="metric-value" style="color:#f59e0b;font-weight:700">¥${totalCost.toFixed(2)}</span></div>
+        <div class="metric"><span class="metric-label">手续费占比</span><span class="metric-value">${costRate.toFixed(3)}%</span></div>
+      </div>
+      <div class="info-card">
+        <div class="card-header"><div class="card-name">持有成本预估</div></div>
+        <div class="metric"><span class="metric-label">管理费率</span><span class="metric-value">${feeRate}%/年</span></div>
+        <div class="metric"><span class="metric-label">持有1年需涨</span><span class="metric-value">${breakEven(1).toFixed(2)}% 才回本</span></div>
+        <div class="metric"><span class="metric-label">持有3年需涨</span><span class="metric-value">${breakEven(3).toFixed(2)}% 才回本</span></div>
+        <div class="metric"><span class="metric-label">持有5年需涨</span><span class="metric-value">${breakEven(5).toFixed(2)}% 才回本</span></div>
+        <div class="alert-info" style="margin-top:8px;font-size:11px"><span>💡</span>含买入+卖出双边费用+管理费损耗。实际需涨幅会因市场波动略有不同。</div>
+      </div>
+    </div>
+  `;
+}
+
+// 3. 场内外套利空间分析
+function renderArbitrageAnalysis() {
+  // 暂时简化：显示场内费率 vs 场外联接费率对比
+  const html = ETF_CODES.slice(0, 6).map(code => {
+    const etf = ETF_DATA_ACTIVE[code];
+    const premium = displayPremium(code);
+    const otcFee = 0.65; // 场外联接典型费率
+    const otcSubFee = 0.12; // 场外申购费1折
+    const spread = premium !== null ? premium - otcSubFee : null;
+    
+    return `
+      <div class="info-card">
+        <div class="card-header"><div class="card-name">${etf.name}</div><div class="card-code">${code.toUpperCase()}</div></div>
+        <div class="metric"><span class="metric-label">场内当前溢价</span><span class="metric-value ${premiumClass(premium)}">${premium !== null ? (premium > 0 ? '+' : '') + premium.toFixed(2) + '%' : 'N/A'}</span></div>
+        <div class="metric"><span class="metric-label">场外申购费</span><span class="metric-value">~0.12% (1折)</span></div>
+        <div class="metric"><span class="metric-label">年化费率差</span><span class="metric-value">${(otcFee - etf.fee_total).toFixed(2)}%</span></div>
+        <div class="metric"><span class="metric-label">套利空间</span><span class="metric-value ${spread !== null && spread > 0.5 ? 'neg-val' : 'pos-val'}">${spread !== null ? (spread > 0 ? '场内贵 ' : '场内便宜 ') + Math.abs(spread).toFixed(2) + '%' : 'N/A'}</span></div>
+      </div>
+    `;
+  }).join('');
+  
+  document.getElementById('arbitrageGrid').innerHTML = html;
+}
+
+// 4. 同类横向对比表
+function renderComparisonTable() {
+  const rows = ETF_CODES.map(code => {
+    const etf = ETF_DATA_ACTIVE[code];
+    const premium = displayPremium(code);
+    const price = getLatestPrice(code);
+    const percentile = getPremiumPercentile(code, 12);
+    
+    return {
+      code,
+      name: etf.name,
+      premium,
+      percentile,
+      fee: etf.fee_total,
+      price
+    };
+  }).sort((a, b) => (a.premium || 999) - (b.premium || 999));
+  
+  const html = `
+    <thead>
+      <tr>
+        <th>排名</th><th>基金名称</th><th>当前溢价</th><th>分位数</th><th>费率</th><th>最新价格</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows.map((r, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td>${r.name}<div class="etf-code">${r.code.toUpperCase()}</div></td>
+          <td class="${premiumClass(r.premium)}">${r.premium !== null ? (r.premium > 0 ? '+' : '') + r.premium.toFixed(2) + '%' : 'N/A'}</td>
+          <td>${r.percentile !== null ? r.percentile.toFixed(0) + '%' : 'N/A'}</td>
+          <td class="${r.fee <= 0.6 ? 'neg-val' : ''}">${r.fee}%</td>
+          <td>¥${r.price !== null ? r.price.toFixed(3) : 'N/A'}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  `;
+  
+  document.getElementById('comparisonTable').innerHTML = html;
+}
+
+// 5. 决策工具Tab渲染
+function renderToolsTab() {
+  const html = `
+    <div class="chart-card">
+      <h3>🧮 定投计算器</h3>
+      <div class="chart-desc">计算定投收益，对比一次性投入</div>
+      <div class="pf-toolbar">
+        <div class="pf-field">
+          <label>选择标的</label>
+          <select id="dcaFund" class="pf-select">
+            ${ETF_CODES.map(code => `<option value="${code}">${ETF_DATA_ACTIVE[code].name} (${code.toUpperCase()})</option>`).join('')}
+          </select>
+        </div>
+        <div class="pf-field">
+          <label>起始月份</label>
+          <input type="month" id="dcaStart" class="pf-input" value="2024-01">
+        </div>
+        <div class="pf-field">
+          <label>每月定投（元）</label>
+          <input type="number" id="dcaAmount" class="pf-input" value="1000" min="100" step="100">
+        </div>
+        <button class="pf-btn" onclick="calculateDCA()">计算</button>
+      </div>
+      <div id="dcaResult"></div>
+    </div>
+    
+    <div class="chart-card">
+      <h3>💰 买入成本计算器</h3>
+      <div class="chart-desc">精确计算场内买入成本（含佣金/印花税/过户费）</div>
+      <div class="pf-toolbar">
+        <div class="pf-field">
+          <label>买入金额（元）</label>
+          <input type="number" id="costAmount" class="pf-input" value="10000" min="100">
+        </div>
+        <div class="pf-field">
+          <label>券商佣金率</label>
+          <select id="costCommission" class="pf-select">
+            <option value="0.00025">万2.5（常见）</option>
+            <option value="0.0002">万2</option>
+            <option value="0.00015">万1.5</option>
+            <option value="0.0001">万1</option>
+          </select>
+        </div>
+        <div class="pf-field">
+          <label>标的</label>
+          <select id="costMarket" class="pf-select">
+            <option value="sh">沪市（有过户费）</option>
+            <option value="sz">深市（无过户费）</option>
+          </select>
+        </div>
+        <button class="pf-btn" onclick="calculateCost()">计算</button>
+      </div>
+      <div id="costResult"></div>
+    </div>
+    
+    <div class="chart-card">
+      <h3>📉 场内外套利空间分析</h3>
+      <div class="chart-desc">对比场内ETF vs 场外联接基金，哪个更划算</div>
+      <div class="info-grid" id="arbitrageGrid"></div>
+    </div>
+    
+    <div class="chart-card">
+      <h3>📊 同类ETF横向对比</h3>
+      <div class="chart-desc">快速筛选最优标的（按溢价升序）</div>
+      <table class="premium-table" id="comparisonTable"></table>
+    </div>
+  `;
+  
+  document.getElementById('chartArea').innerHTML = html;
+  renderArbitrageAnalysis();
+  renderComparisonTable();
+}
+
 </script>
 <script src="portfolio.js"></script>
 </body></html>
