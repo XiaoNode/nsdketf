@@ -2,8 +2,8 @@
 
 > 📊 追踪纳指100/标普500/美国50/道琼斯 QDII ETF 的场内价格、净值、折溢价率，提供双口径（IOPV + 单位净值）溢价分析与每日邮件播报
 
-[![GitHub Pages](https://img.shields.io/badge/Pages-在线访问-blue)](https://666ghj.github.io/nsdketf/)
-[![Auto Update](https://img.shields.io/badge/Auto%20Update-每日5轮-green)](https://github.com/666ghj/nsdketf/actions)
+[![GitHub Pages](https://img.shields.io/badge/Pages-在线访问-blue)](https://xiaonode.github.io/nsdketf/)
+[![Auto Update](https://img.shields.io/badge/Auto%20Update-每日5轮-green)](https://github.com/XiaoNode/nsdketf/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
@@ -52,12 +52,12 @@
 ## 🚀 快速开始
 
 ### 在线访问
-👉 **[https://666ghj.github.io/nsdketf/](https://666ghj.github.io/nsdketf/)**
+👉 **[https://xiaonode.github.io/nsdketf/](https://xiaonode.github.io/nsdketf/)**
 
 ### 本地运行
 ```bash
 # 克隆仓库
-git clone https://github.com/666ghj/nsdketf.git
+git clone https://github.com/XiaoNode/nsdketf.git
 cd nsdketf
 
 # 手动更新数据（Python 标准库，无需额外依赖）
@@ -192,4 +192,4 @@ git diff --check  # 检查空白符错误
 ---
 
 **最后更新**：2026-10-12  
-**数据质量审查报告**：[AUDIT_REPORT_2026-10-10.md](AUDIT_REPORT_2026-10-10.md)
+**Star 本项目**：欢迎 ⭐ 支持开源！
