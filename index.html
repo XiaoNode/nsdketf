@@ -4,9 +4,47 @@
 <meta charset="UTF-8" data-page-node-id="cqnRc3kYQBabIkiLfpM1dw">
 <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="V90PMfniPqdRu5YWDYCjfI">
 <title>纳斯达克100 QDII ETF 分析工具</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://fastly.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://fastly.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<script src="https://fastly.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script>
+// CDN 多源降级：主源（fastly.jsdelivr，大陆可达）失败时按序切换备用源。
+// 背景：2026-09 staticfile 证书错误、2026-10 jsdelivr 主域名被墙，都导致过白图。
+// 任一库迟到加载时，页面脚本可能已跑完首轮 render（彼时无 Chart），
+// 因此全部就绪后需按需重渲一次。makeLineChart 内也有 Chart 缺失降级，双保险。
+(function(){
+  var LIBS=[
+    {name:'Chart',sources:[
+      'https://fastly.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js',
+      'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js']},
+    {name:'ChartZoom',sources:[
+      'https://fastly.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js']},
+    {name:'Hammer',sources:[
+      'https://fastly.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js']}
+  ];
+  var recovered=false;
+  function loadLib(i,src){
+    var lib=LIBS[i];
+    if(!lib){finish();return;}
+    if(window[lib.name]){loadLib(i+1,0);return;}
+    if(src>=lib.sources.length){loadLib(i+1,0);return;}
+    var s=document.createElement('script');
+    s.src=lib.sources[src];
+    s.onload=function(){recovered=true;loadLib(i+1,0);};
+    s.onerror=function(){loadLib(i,src+1);};
+    document.head.appendChild(s);
+  }
+  function finish(){
+    if(recovered&&typeof renderAll==='function'){
+      try{renderAll();}catch(e){}
+    }
+  }
+  loadLib(0,0);
+})();
+</script>
 <style>
 :root{--bg:#0f1117;--surface:#1a1d27;--surface2:#22263a;--border:#2e3248;--accent:#4f7bff;--text:#e2e8f0;--text2:#8892a4;--green:#22c55e;--red:#ef4444;--gold:#f59e0b}
 *{margin:0;padding:0;box-sizing:border-box}
@@ -317,34 +355,43 @@ function collectMonthly(prefix, startYear, startMonth) {
 }
 function mergeMonthly(months) {
   const merged = {};
+  // 时间序列字段按月拼接：price/premium/nav 之外，IOPV 两口径同样是
+  // 「月度文件只存当月切片」的序列，必须拼接而不是被最新月份整体覆盖，
+  // 否则合并后只剩当月一片（曾导致 IOPV 口径图只剩最近几天）。
+  const SERIES_KEYS = ['price', 'premium', 'nav', 'iopv_premium', 'iopv_premium_est'];
   months.forEach(m => {
     Object.keys(m).forEach(code => {
       const src = m[code];
       if (!merged[code]) {
-        merged[code] = {
-          ...src,
-          price: [...(src.price || [])],
-          premium: [...(src.premium || [])],
-          nav: [...(src.nav || [])]
-        };
+        merged[code] = { ...src };
+        SERIES_KEYS.forEach(k => {
+          if (Array.isArray(src[k])) merged[code][k] = [...src[k]];
+        });
       } else {
         // 标量元数据以最新月份为准：申购状态/额度/规模/费率/阶段涨幅等随时会更新，
         // 若只保留最早月份的取值会导致界面显示过时信息（例如已恢复申购仍显示“暂停申购”）。
         // 仅在新月份确实带该字段时覆盖，避免较早月份独有的字段被清空。
         Object.keys(src).forEach(key => {
-          if (key === 'price' || key === 'premium' || key === 'nav') return;
+          if (SERIES_KEYS.includes(key)) return;
           if (src[key] !== undefined) merged[code][key] = src[key];
         });
-        merged[code].price = merged[code].price.concat(src.price || []);
-        merged[code].premium = merged[code].premium.concat(src.premium || []);
-        merged[code].nav = merged[code].nav.concat(src.nav || []);
+        SERIES_KEYS.forEach(k => {
+          const rows = src[k];
+          if (!Array.isArray(rows) || !rows.length) return;
+          const existing = merged[code][k] || [];
+          const incoming = new Set(rows.map(r => r.date));
+          // 后月份同日期条目覆盖旧条目（月度文件整体重算场景），其余旧条目保留
+          merged[code][k] = existing.filter(r => !incoming.has(r.date)).concat(rows);
+        });
       }
     });
   });
   Object.keys(merged).forEach(code => {
-    merged[code].price.sort((a, b) => a.date.localeCompare(b.date));
-    merged[code].premium.sort((a, b) => a.date.localeCompare(b.date));
-    merged[code].nav.sort((a, b) => a.date.localeCompare(b.date));
+    SERIES_KEYS.forEach(k => {
+      if (Array.isArray(merged[code][k])) {
+        merged[code][k].sort((a, b) => a.date.localeCompare(b.date));
+      }
+    });
   });
   return merged;
 }
@@ -568,6 +615,12 @@ function destroyChart(id){if(charts[id]){charts[id].destroy();delete charts[id];
 
 function makeLineChart(canvasId,labels,datasets,yFmt){
   destroyChart(canvasId);
+  if(typeof Chart==='undefined'){
+    // CDN 全部失败的降级：不抛错中断 renderAll，图表位显示提示
+    var box=document.getElementById(canvasId);
+    if(box&&box.parentNode)box.parentNode.innerHTML='<div style="display:flex;height:100%;align-items:center;justify-content:center;color:#8892a4;font-size:13px;text-align:center;padding:0 24px">图表库加载失败，多源降级也未成功<br>请检查网络后刷新页面</div>';
+    return;
+  }
   const ctx=document.getElementById(canvasId).getContext('2d');
   charts[canvasId]=new Chart(ctx,{
     type:'line',
