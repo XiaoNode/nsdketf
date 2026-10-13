@@ -41,3 +41,4 @@ credentials.json
 *.pem
 *.key
 _backup_local/
+.workbuddy/
