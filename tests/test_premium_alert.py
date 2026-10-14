@@ -290,6 +290,79 @@ class AlertTests(unittest.TestCase):
         info['iopv_premium'] = [{'date': day, 'value': value, 'iopv': iopv}]
         file.write_text(json.dumps(data), encoding='utf-8')
 
+    def test_iopv_digest_uses_published_history_for_period_averages(self):
+        """当期值取 IOPV，但历史均值必须由已披露净值的长序列支撑。
+
+        真实数据里 IOPV 实测仅自 2026-10-08 起（每只 4~5 条），若只用它算
+        历史窗口，近1个月/3个月/1年恒为「数据不足」。
+        """
+        published = self.write_long_history_fund(
+            '2025-09-01', {'2026-09-23': 9.0, '2026-09-24': 12.649})
+        item = premium_alert.select_ranked_funds(self.root, '2026-09-24')[0]
+        self.assertEqual(item['series'], 'iopv_premium')
+        self.assertEqual(item['premium'], 12.649)
+        # 上一有效交易日：被同日 IOPV 覆盖，而不是已披露净值的 4.0%
+        self.assertEqual(item['comparison']['previous_date'], '2026-09-23')
+        self.assertEqual(item['comparison']['previous_premium'], 9.0)
+
+        merged = dict(published)
+        merged['2026-09-23'] = 9.0
+        merged['2026-09-24'] = 12.649
+        prior = sorted((day, value) for day, value in merged.items() if day < '2026-09-24')
+        for months in (1, 3, 12):
+            start = premium_alert.months_ago(datetime(2026, 9, 24).date(), months).isoformat()
+            window = [value for day, value in prior if day >= start]
+            self.assertTrue(window, months)
+            average, count = item['comparison']['averages'][months]
+            self.assertEqual(count, len(window))
+            self.assertAlmostEqual(average, sum(window) / len(window), places=6)
+        # 一年窗口应有两百多个有效交易日，而不是「数据不足」
+        self.assertGreater(item['comparison']['averages'][12][1], 200)
+
+    def test_iopv_digest_keeps_incomplete_year_empty(self):
+        """历史不足完整一年时，近1年平均仍应诚实显示数据不足。"""
+        self.write_long_history_fund('2026-06-01', {'2026-09-24': 12.649})
+        averages = premium_alert.select_ranked_funds(
+            self.root, '2026-09-24')[0]['comparison']['averages']
+        self.assertIsNotNone(averages[1])
+        self.assertIsNotNone(averages[3])
+        self.assertIsNone(averages[12])
+
+    def write_long_history_fund(self, start, iopv_sessions, today='2026-09-24'):
+        """一只「已披露净值长历史 + 最近数日实测 IOPV」的基金（真实数据形态）。
+
+        近1个月 4%、1~3个月 6%、更早 8%，便于区分各窗口；返回已披露净值口径
+        的 {日期: 溢价} 供期望值计算。
+        """
+        today_date = datetime.strptime(today, '%Y-%m-%d').date()
+        month1 = premium_alert.months_ago(today_date, 1)
+        month3 = premium_alert.months_ago(today_date, 3)
+        prices, premiums = {}, {}
+        day = datetime.strptime(start, '%Y-%m-%d').date()
+        while day < today_date:
+            if day.weekday() < 5:
+                value = 4.0 if day > month1 else 6.0 if day > month3 else 8.0
+                prices[day.isoformat()] = round(1 + value / 100, 6)
+                premiums[day.isoformat()] = value
+            day += timedelta(days=1)
+        iopv_records = []
+        for key in sorted(iopv_sessions):
+            value = iopv_sessions[key]
+            price = prices.setdefault(key, round(1 + value / 100, 6))
+            iopv_records.append({'date': key, 'value': value,
+                                 'iopv': round(price / (1 + value / 100), 6)})
+        info = {
+            'name': '长历史基金',
+            'price': [{'date': key, 'value': prices[key]} for key in sorted(prices)],
+            'nav': [{'date': key, 'value': 1.0} for key in sorted(prices)],
+            'premium': [{'date': key, 'nav_date': key, 'value': premiums[key]}
+                        for key in sorted(premiums)],
+            'iopv_premium': iopv_records,
+        }
+        (self.root / 'etf_all.json').write_text(
+            json.dumps({'sh500000': info}), encoding='utf-8')
+        return premiums
+
     def test_iopv_series_takes_precedence_over_nav_series(self):
         self.write_funds()
         self.add_iopv_session()

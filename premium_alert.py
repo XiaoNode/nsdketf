@@ -138,6 +138,14 @@ def select_ranked_funds(root, price_date):
             if chosen is None:
                 continue
             key, history = chosen
+            if key == 'iopv_premium':
+                # IOPV 实测序列自 2026-10-08 才开始采集（每只仅数日），仅凭它算
+                # 历史均值恒为「数据不足」。历史段并入已披露净值口径——已披露
+                # 净值日的估算 IOPV 恰等于 price/NAV(T)，与页面 IOPV 口径走势
+                # 图同源；实测记录覆盖日以实测为准，环比保持 IOPV 对 IOPV。
+                published = verified_series(info, price_date, 'premium')
+                published.update(history)
+                history = published
             record = latest_record(info.get(key) or [], price_date)
             if record is None:
                 continue
@@ -425,7 +433,7 @@ def build_message(board, today, recipient, sender):
         *high_detail,
         *plain_blocks,
         '历史均值按对应日历区间内的有效交易日等权平均，排除本次收盘日；历史不足完整区间显示数据不足。',
-        '口径：场内收盘价 ÷ 同日已披露单位净值 − 1；未披露当日净值则不列入，并非IOPV溢价。',
+        '均值口径：已披露单位净值历史为主，最近数日（IOPV 采集期起）为实测 IOPV，与页面 IOPV 口径走势一致。',
         '来源：本项目每日更新的收盘价与基金净值；QDII净值存在披露滞后，长假后可能补发旧数据日。',
         '仅作关注提醒，不构成投资建议。',
     ])
@@ -439,8 +447,9 @@ def build_message(board, today, recipient, sender):
     body.append(f'<h3>溢价最高 {len(board["highest"])} 只（降序）</h3>'
                 '<p>溢价越高，追高风险越大。</p>' + high_html)
     body.append('<p>历史均值按对应日历区间内的有效交易日等权平均，排除本次收盘日；'
-                '历史不足完整区间显示数据不足。场内收盘价 ÷ 同日已披露单位净值 − 1；'
-                '未披露当日净值则不列入，并非IOPV溢价。仅作关注提醒，不构成投资建议。</p>')
+                '历史不足完整区间显示数据不足。均值口径以已披露单位净值历史为主，'
+                '最近数日（IOPV 采集期起）采用实测 IOPV，与页面 IOPV 口径走势一致。'
+                '仅作关注提醒，不构成投资建议。</p>')
     mail.add_alternative(''.join(body) + '</body></html>', subtype='html')
     return mail
 
