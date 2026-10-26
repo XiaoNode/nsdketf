@@ -17,6 +17,8 @@ on:
     - cron: '20 14 * * 1-5'
     # 北京 次日 08:20 —— 兜底: 前一晚若被严重延迟或失败, 早上补一次
     - cron: '20 0 * * 1-5'
+    # 北京每日 06:35：仅更新汇率，含周末；ETF 作业不会因此额外运行或发邮件。
+    - cron: '35 22 * * *'
   workflow_dispatch:  # 允许手动触发
 
 permissions:
@@ -28,6 +30,7 @@ concurrency:
 
 jobs:
   update:
+    if: ${{ github.event_name != 'schedule' || github.event.schedule != '35 22 * * *' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -132,6 +135,70 @@ jobs:
           exclude_assets: |
             .github
             daily_update.py
+            fx_update.py
+            premium_alert.py
+            premium-alert-state.json
+            fetch_etf_data.py
+            fetch_etf_data_v2.py
+            add_etf_159509.py
+            tests
+            requirements.txt
+            README.md
+            .gitignore
+
+  update-fx:
+    # ETF 失败后仍单独更新汇率；独立检出不会带入 ETF 失败时的部分写入，也不发送邮件。
+    needs: update
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout latest data
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate FX updater
+        run: python -m unittest discover -s tests -p 'test_fx_update.py' -v
+
+      - name: Update independently verified FX history
+        run: python fx_update.py
+
+      - name: Check FX changes
+        id: fx_changes
+        run: |
+          if [[ -n "$(git status --porcelain -- data/fx_usdcny.json)" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit FX history and collection status
+        if: steps.fx_changes.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/fx_usdcny.json
+          git commit -m "chore: update verified USD/CNY history"
+          git push
+
+      - name: Deploy FX history to GitHub Pages
+        if: steps.fx_changes.outputs.changed == 'true'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./
+          publish_branch: gh-pages
+          exclude_assets: |
+            .github
+            daily_update.py
+            fx_update.py
             premium_alert.py
             premium-alert-state.json
             fetch_etf_data.py

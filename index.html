@@ -200,6 +200,7 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--ac
       <div class="tab" data-tab="nav" data-page-node-id="pRuMldUngJLVSeY5bxzEWQ">💰 净值走势</div>
       <div class="tab" data-tab="info" data-page-node-id="KwG1Rss0NQ6a7jzCpAWxWv">📋 基金信息</div>
       <div class="tab" data-tab="tools" data-page-node-id="toolsTab">🧮 决策工具</div>
+      <div class="tab" data-tab="fx">美元 / 人民币</div>
       <div class="tab" data-tab="valuation" id="tabValuation" data-page-node-id="5vpvCly9bR5FcFxAw5ag9L">📊 估值参考</div>
     </div>
     <div class="chart-area" id="chartArea" data-page-node-id="KbLSEDbGgSmrSh4MGU43uo"></div>
@@ -411,6 +412,7 @@ let ETF_DATA_ACTIVE=ETF_DATA;
 
 function switchIndex(idx){
   if(idx===currentIndex)return;
+  if(window.FX)window.FX.dispose();
   currentIndex=idx;
   passiveSort={key:null,dir:1};
   passiveStatusFilter='all';
@@ -591,7 +593,12 @@ function toggleSelect(code){
   renderAll();
 }
 function renderAll(){
+  if(window.FX)window.FX.dispose();
   updateFreshness();
+  if(currentTab==='fx'&&window.FX){
+    if(currentIndex!=='ndx_passive'&&currentIndex!=='holdings')renderSidebar();
+    window.FX.render();return;
+  }
   if(currentIndex==='ndx_passive'){
     renderNavTab();
     return;
@@ -1187,5 +1194,6 @@ function renderToolsTab() {
 }
 
 </script>
+<script src="fx.js"></script>
 <script src="portfolio.js"></script>
 </body></html>

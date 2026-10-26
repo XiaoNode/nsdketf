@@ -28,6 +28,14 @@
 - 低于 5% 标的黄色高亮 ⚠️，建议优先关注
 - 历史均值（近 1/3/12 个月）辅助判断
 
+### 美元兑人民币汇率参考
+- 新增“美元 / 人民币”标签页，提供近 1 / 3 / 5 / 10 年日历史和双源明细。
+- 统一为 **1 USD = X CNY**。主源 [ECB](https://www.ecb.europa.eu/stats/eurofxref/index.en.html) 的 EUR/CNY ÷ EUR/USD；独立复核源 [FRED DEXCHUS / 美联储 H.10](https://fred.stlouisfed.org/series/DEXCHUS)。
+- 同日期 `abs(ECB / FRED - 1) × 100 ≤ 0.5%` 标记通过；单源缺失为待核验，超限为异常。两源采样时点不同，仅为合理性复核，不是同一收盘价精确对账；不混入离岸 CNH 或人民币中间价。
+- “我的持仓”支持买入汇率参考：留空仅匹配买入当天已通过双源核验的数据，缺失不使用相邻日期替代；手填值单独标记为未验证。
+- 买入参考汇率不重复计入人民币盈亏，不代表基金实际换汇价或合同估值汇率。历史记录、导入导出与 Gist 同步保持兼容。
+- FRED 日观察值发布滞后。**每日抓取不等于每日已有双源确认值**；图表分别标注最近已核验日、主源最新日及抓取状态。数据源失败时保留缓存并提示，异常不伪装成已核验。
+
 ### 🔄 全自动更新
 - **5 轮/天**（北京 15:15/16:40/20:20/22:20/次日 08:20），幂等互补
 - 数据源双备份（新浪 + 腾讯 IOPV fallback），抗单点故障
@@ -62,6 +70,7 @@ cd nsdketf
 
 # 手动更新数据（Python 标准库，无需额外依赖）
 python daily_update.py
+python fx_update.py  # 独立更新近十年 USD/CNY 双源参考数据
 
 # 本地预览（任意 HTTP 服务器）
 python -m http.server 8000
@@ -85,6 +94,9 @@ nsdketf/
 │   └── ndx_passive_data_YYYY-MM.js      # 场外联接月度数据
 ├── tests/                               # 单元测试（55 个用例）
 ├── index.html                           # 前端单页应用（无框架，纯 JS）
+├── fx.js                                # 汇率历史图表与精确日期查询
+├── fx_update.py                         # 双源汇率抓取、核验与缓存保护
+├── data/fx_usdcny.json                  # 近十年汇率及逐日验证状态
 ├── daily_update.py                      # 每日更新核心脚本
 ├── premium_alert.py                     # 低溢价邮件播报
 ├── etf_all.json                         # 纳指100完整历史（2.3MB）
@@ -126,6 +138,11 @@ nsdketf/
 - 08:20  # 次日兜底：前晚延迟/失败的补跑
 ```
 
+### 汇率独立更新
+- 复用同一工作流的工作日五轮调度，在 ETF 作业结束后独立抓取；即使 ETF 更新失败，仍尝试汇率更新，不触发额外邮件。
+- 每轮重取十年双源历史，核验源数据覆盖并保留原始数值及状态；原子写入 `data/fx_usdcny.json`，仅提交该汇率文件。
+- 无需 API 密钥。HTTPS 保持证书验证；Windows Python 证书链异常时可使用系统 `curl.exe` 信任库，不使用跳过证书验证选项。
+
 ### 邮件播报
 - **触发**：每交易日 16:00 后（工作日，跳过周末）
 - **去重**：通过 `premium-alert-state.json` 锚点（数据日 `price_date`）保证同一会话不重发
@@ -140,8 +157,13 @@ nsdketf/
 # 运行全部测试（55 个用例）
 python -m unittest discover -s tests -v
 
+# 前端行为与汇率边界测试
+node tests/verify_fx.js
+node tests/verify_portfolio.js
+node tests/verify_page_runtime.js
+
 # 代码检查
-python -m py_compile daily_update.py premium_alert.py
+python -m py_compile daily_update.py premium_alert.py fx_update.py
 git diff --check  # 检查空白符错误
 ```
 
