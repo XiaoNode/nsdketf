@@ -226,6 +226,69 @@
     return { value, valid: Number.isFinite(value) };
   }
 
+  function validFxValue(value) {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 100;
+  }
+
+  function verifiedFx(date) {
+    const fx = window.FX;
+    const record = date && fx && typeof fx.lookup === 'function' ? fx.lookup(date) : null;
+    return record && record.date === date && record.status === 'verified' && validFxValue(record.value)
+      ? { value: record.value, date, source: 'ecb_fred', status: 'verified', ...(record.cached ? { cached: true } : {}) } : null;
+  }
+
+  function normalizeBuyFx(input, date) {
+    if (!input || typeof input !== 'object' || Array.isArray(input) || !validFxValue(input.value) || !date || input.date !== date) return null;
+    if (input.source === 'manual') return { value: input.value, date, source: 'manual', status: 'manual' };
+    if (input.source === 'ecb_fred') return verifiedFx(date) || { value: input.value, date, source: 'ecb_fred', status: 'unverified' };
+    return null;
+  }
+
+  function buyFxInfo(lot) {
+    const saved = normalizeBuyFx(lot.buyFx, lot.date);
+    if (saved && saved.source === 'manual') return { ...saved, label: '手填，未双源验证' };
+    const verified = verifiedFx(lot.date);
+    if (verified) return { ...verified, label: verified.cached ? '自动参考 · 历史已核验缓存，本轮未复核' : '自动参考 · ECB-FRED同日跨时点参考核验' };
+    const status = window.FX && typeof window.FX.status === 'function' ? window.FX.status(lot.date) : '汇率数据未加载';
+    if (saved) return { ...saved, label: '已存参考，未复核 · ' + status };
+    return { value: null, date: lot.date, status: 'missing', label: status };
+  }
+
+  function optionalFx(input, date) {
+    const raw = String(input == null ? '' : input).trim();
+    if (!raw) return { valid: true, value: verifiedFx(date) };
+    const value = Number(raw);
+    return { valid: validFxValue(value) && !!date, value: { value, date, source: 'manual', status: 'manual' } };
+  }
+
+  function fxInfoHTML(info) {
+    return `${info.value == null ? '—' : info.value.toFixed(4)}<small style="display:block;font-size:11px;color:var(--text2)">${esc(info.date || '未选日期')} · ${esc(info.label)}</small>`;
+  }
+
+  function updateFxPreview(editing) {
+    const dateEl = document.getElementById(editing ? 'pfEditDate' : 'pfDate');
+    const input = document.getElementById(editing ? 'pfEditBuyFx' : 'pfBuyFx');
+    const preview = document.getElementById(editing ? 'pfEditFxPreview' : 'pfFxPreview');
+    if (!dateEl || !input || !preview) return;
+    const parsed = optionalFx(input.value, dateEl.value);
+    const invalid = !parsed.valid || (input.validity && input.validity.badInput);
+    const stored = editing && EDITING && EDITING.lot.buyFx && EDITING.lot.buyFx.source === 'ecb_fred'
+      ? normalizeBuyFx(EDITING.lot.buyFx, dateEl.value) : null;
+    preview.innerHTML = invalid ? '请输入大于 0 且小于 100 的有效汇率，并选择买入日期'
+      : fxInfoHTML(buyFxInfo({ date: dateEl.value, buyFx: parsed.value || stored }));
+  }
+
+  function refreshFxDisplay() {
+    updateFxPreview(false);
+    updateFxPreview(true);
+    document.querySelectorAll('[data-fx-lot]').forEach(cell => {
+      const [code, index] = cell.dataset.fxLot.split('|');
+      const holding = HOLDINGS.find(h => h.code === code);
+      const lot = holding && computeRow(holding).lots[Number(index)];
+      if (lot) cell.innerHTML = fxInfoHTML(buyFxInfo(lot));
+    });
+  }
+
   function normalizeHolding(h) {
     if (!h || !h.code || !ALL_ETF[h.code]) return null;
     if (Array.isArray(h.lots)) {
@@ -236,7 +299,8 @@
           shares: Number(l.shares),
           price: Number(l.price),
           fee: (typeof l.fee === 'number' && l.fee >= 0) ? l.fee : 0, // 旧数据无 fee 视为 0, 不重算
-          ...(typeof l.buyPremium === 'number' && Number.isFinite(l.buyPremium) ? { buyPremium: l.buyPremium } : {})
+          ...(typeof l.buyPremium === 'number' && Number.isFinite(l.buyPremium) ? { buyPremium: l.buyPremium } : {}),
+          ...(normalizeBuyFx(l.buyFx, (l.date || '').toString()) ? { buyFx: normalizeBuyFx(l.buyFx, (l.date || '').toString()) } : {})
         }));
     } else if (h.shares != null && h.costPerShare != null) {
       // 兼容旧版单笔均价格式
@@ -395,11 +459,14 @@
     <div class="pf-field"><label>份额</label><input type="number" id="pfShares" class="pf-input" placeholder="如 100" min="0" step="any"></div>
     <div class="pf-field"><label>买入单价(¥/份)</label><input type="number" id="pfCost" class="pf-input" placeholder="如 1.234" min="0" step="any"></div>
     <div class="pf-field"><label>买入时溢价(%，选填)</label><input type="number" id="pfBuyPremium" class="pf-input" placeholder="留空取买入日" step="any"></div>
+    <div class="pf-field"><label>买入汇率(USD/CNY，选填)</label><input type="number" id="pfBuyFx" class="pf-input" placeholder="留空取买入日参考" min="0" max="100" step="any"></div>
     <div class="pf-field"><label>手续费(¥)</label><input type="number" id="pfFee" class="pf-input" placeholder="自动" min="0" step="any"></div>
     <div class="pf-field" style="min-width:110px"><label>成交额</label><span id="pfAmountPreview" style="padding:6px 10px;font-weight:600">¥0.00</span></div>
     <div class="pf-field" style="min-width:110px"><label>成本(含费)</label><span id="pfNetCostPreview" style="padding:6px 10px;font-weight:600;color:var(--text)">¥0.00</span></div>
     <button class="pf-btn" id="btnAdd">添加记录</button>
   </div>
+  <div class="chart-desc" style="margin-top:10px">1 USD 对应人民币元；手填未双源验证。留空仅取买入当日已核验参考，不使用相邻日；并非成交时汇率，不参与人民币盈亏计算。</div>
+  <div id="pfFxPreview" style="font-size:12px;margin-top:6px" aria-live="polite"></div>
   <div class="pf-toolbar" style="margin-top:10px;gap:12px;flex-wrap:wrap;border-top:1px solid rgba(128,128,128,.15);padding-top:10px">
     <div style="font-size:12px;color:var(--text2)">默认费率</div>
     <div class="pf-field" style="min-width:90px"><label style="font-size:11px">佣金费率(%)</label><input type="number" id="pfFeeRate" class="pf-input" value="${formatRatePct(loadFeeSettings().rate)}" min="0" step="any" style="font-size:12px"></div>
@@ -414,10 +481,12 @@
 <div class="chart-card">
   <h3>&#128202; 持仓明细</h3>
   <div class="chart-desc">每笔建仓独立清算，同一 ETF 的多笔合并为汇总行并<strong>默认折叠</strong>，点击汇总行展开/收起明细，每笔均可编辑。红=盈利，绿=亏损（A股惯例）。</div>
-  <table class="premium-table" style="margin-top:8px">
-    <thead><tr><th>名称 / 代码</th><th>市场</th><th>日期</th><th>份额</th><th>买入单价</th><th>买入溢价</th><th>手续费</th><th>投入(含费)</th><th>最新价</th><th>当前市值</th><th>盈亏额</th><th>盈亏%</th><th></th></tr></thead>
+  <div style="overflow-x:auto">
+  <table class="premium-table" style="margin-top:8px;min-width:1200px">
+    <thead><tr><th>名称 / 代码</th><th>市场</th><th>日期</th><th>份额</th><th>买入单价</th><th>买入溢价</th><th>买入汇率(USD/CNY)</th><th>手续费</th><th>投入(含费)</th><th>最新价</th><th>当前市值</th><th>盈亏额</th><th>盈亏%</th><th></th></tr></thead>
     <tbody id="pfTbody"></tbody>
   </table>
+  </div>
 </div>`;
   }
 
@@ -441,12 +510,17 @@
     const sharesEl = document.getElementById('pfShares');
     const costEl = document.getElementById('pfCost');
     const premiumEl = document.getElementById('pfBuyPremium');
+    const fxEl = document.getElementById('pfBuyFx');
     const feeEl = document.getElementById('pfFee');
     const rateEl = document.getElementById('pfFeeRate');
     const minEl = document.getElementById('pfMinFee');
     const amtEl = document.getElementById('pfAmountPreview');
     const netEl = document.getElementById('pfNetCostPreview');
-    if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
+    if (dateEl && !dateEl.value) dateEl.value = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    if (dateEl) dateEl.addEventListener('input', () => updateFxPreview(false));
+    if (dateEl) dateEl.addEventListener('change', () => updateFxPreview(false));
+    if (fxEl) fxEl.addEventListener('input', () => updateFxPreview(false));
+    updateFxPreview(false);
 
     const getSettings = currentFeeSettings;
     const previewAmount = () => {
@@ -477,6 +551,8 @@
       const price = parseFloat(costEl.value);
       const premium = optionalPremium(premiumEl ? premiumEl.value : '');
       if (!premium.valid) { toast('请输入有效的买入时溢价，或留空自动匹配买入日', true); return; }
+      const fx = optionalFx(fxEl ? fxEl.value : '', date);
+      if (!fx.valid || (fxEl && fxEl.validity && fxEl.validity.badInput)) { toast('请输入大于 0 且小于 100 的有效汇率，并选择买入日期', true); return; }
       const amount = shares * price;
       let fee = parseFloat(feeEl ? feeEl.value : '');
       if (!isFinite(fee) || fee < 0) fee = calcFee(amount, getSettings());
@@ -486,10 +562,12 @@
       saveFeeSettings(settings);
       let ex = HOLDINGS.find(h => h.code === code);
       if (!ex) { ex = { code, lots: [] }; HOLDINGS.push(ex); }
-      ex.lots.push({ date: date || '', shares, price, fee, ...(premium.value != null ? { buyPremium: premium.value } : {}) });
+      ex.lots.push({ date: date || '', shares, price, fee, ...(premium.value != null ? { buyPremium: premium.value } : {}), ...(fx.value ? { buyFx: fx.value } : {}) });
       EXPANDED.add(code);          // 刚添加的 ETF 自动展开, 便于确认记录已写入
       persistHoldings(); renderHoldingsTable();
       sharesEl.value = ''; costEl.value = ''; if (premiumEl) premiumEl.value = ''; if (feeEl) { feeEl.value = ''; delete feeEl.dataset.userEdited; }
+      if (fxEl) fxEl.value = '';
+      updateFxPreview(false);
       if (amtEl) amtEl.textContent = '¥0.00'; if (netEl) netEl.textContent = '¥0.00';
     });
 
@@ -542,7 +620,7 @@
     const sumBox = document.getElementById('pfSummary');
     if (!tbody) return;
     if (!HOLDINGS.length) {
-      tbody.innerHTML = '<tr><td colspan="13" style="color:var(--text2);text-align:center;padding:24px">暂无持仓，先在上方添加建仓记录。</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="14" style="color:var(--text2);text-align:center;padding:24px">暂无持仓，先在上方添加建仓记录。</td></tr>';
       if (sumBox) sumBox.innerHTML = '';
       return;
     }
@@ -559,6 +637,7 @@
         <td style="color:var(--text2)">${r.lots.length} 笔</td>
         <td style="font-weight:600">${r.shares}</td>
         <td>${fmtPrice(r.avgCost)}</td>
+        <td>—</td>
         <td>—</td>
         <td style="font-weight:600">${fmtMoney(r.totalFee)}</td>
         <td style="font-weight:600">${fmtMoney(r.netCost)}</td>
@@ -582,6 +661,7 @@
             <td><input type="number" id="pfEditShares" class="pf-input-mini" value="${lv.s}" min="0" step="any"></td>
             <td><input type="number" id="pfEditPrice" class="pf-input-mini" value="${lv.p}" min="0" step="any"></td>
             <td><input type="number" id="pfEditBuyPremium" class="pf-input-mini" value="${typeof lot.buyPremium === 'number' ? lot.buyPremium : ''}" placeholder="自动匹配买入日" step="any" title="留空按买入日期显示日终历史溢价"></td>
+            <td><input type="number" id="pfEditBuyFx" class="pf-input-mini" value="${lot.buyFx && lot.buyFx.source === 'manual' && validFxValue(lot.buyFx.value) ? lot.buyFx.value : ''}" placeholder="自动匹配买入日" min="0" max="100" step="any" title="手填未双源验证；清空恢复买入日自动参考"><div id="pfEditFxPreview" style="min-width:160px;font-size:12px" aria-live="polite">${fxInfoHTML(buyFxInfo(lot))}</div></td>
             <td><input type="number" id="pfEditFee" class="pf-input-mini" value="${lv.fee}" min="0" step="any"></td>
             <td id="pfEditNet">${fmtMoney(lv.netCost)}</td>
             <td>${fmtPrice(r.price)}</td>
@@ -598,6 +678,7 @@
           <td>${lv.s}</td>
           <td>${fmtPrice(lv.p)}</td>
           <td title="${premiumTitle}">${fmtPct(premiumInfo.value)}${premiumInfo.value != null && typeof lot.buyPremium !== 'number' ? ' <small>自动</small>' : ''}</td>
+          <td data-fx-lot="${h.code}|${i}" style="min-width:160px">${fxInfoHTML(buyFxInfo(lot))}</td>
           <td>${fmtMoney(lv.fee)}</td>
           <td>${fmtMoney(lv.netCost)}</td>
           <td>${fmtPrice(r.price)}</td>
@@ -659,6 +740,14 @@
     const editFeeEl = document.getElementById('pfEditFee');
     if (editFeeEl) editFeeEl.addEventListener('input', () => { editFeeEl.dataset.userEdited = '1'; syncEditPreview(); });
 
+    ['pfEditDate', 'pfEditBuyFx'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.addEventListener('input', () => updateFxPreview(true));
+        el.addEventListener('change', () => updateFxPreview(true));
+      }
+    });
+
     // 保存编辑
     tbody.querySelectorAll('[data-edit-save]').forEach(b => b.addEventListener('click', () => {
       const [code, idx] = b.dataset.editSave.split('|');
@@ -670,6 +759,10 @@
       const sEl = document.getElementById('pfEditShares');
       const pEl = document.getElementById('pfEditPrice');
       const premiumEl = document.getElementById('pfEditBuyPremium');
+      const fxEl = document.getElementById('pfEditBuyFx');
+      const date = dEl ? dEl.value : lot.date;
+      const fx = optionalFx(fxEl ? fxEl.value : '', date);
+      if (!fx.valid || (fxEl && fxEl.validity && fxEl.validity.badInput)) { toast('请输入大于 0 且小于 100 的有效汇率，并选择买入日期', true); return; }
       const fEl = document.getElementById('pfEditFee');
       const premium = optionalPremium(premiumEl ? premiumEl.value : '');
       if (!premium.valid) { toast('请输入有效的买入时溢价，或留空自动匹配买入日', true); return; }
@@ -680,8 +773,10 @@
       if (!isFinite(fee) || fee < 0) fee = calcFee(shares * price, currentFeeSettings());
       const realIdx = ex.lots.indexOf(lot);
       if (realIdx < 0) return;
-      ex.lots[realIdx] = { date: dEl ? dEl.value : lot.date, shares: shares, price: price, fee: fee,
-        ...(premium.value != null ? { buyPremium: premium.value } : {}) };
+      // 离线编辑同日记录不丢弃已存自动参考，但不能继承“已核验”状态。
+      const buyFx = fx.value || (lot.buyFx && lot.buyFx.source === 'ecb_fred' ? normalizeBuyFx(lot.buyFx, date) : null);
+      ex.lots[realIdx] = { date, shares: shares, price: price, fee: fee,
+        ...(premium.value != null ? { buyPremium: premium.value } : {}), ...(buyFx ? { buyFx } : {}) };
       EDITING = null;
       persistHoldings(); renderHoldingsTable();
       toast('已保存该笔建仓记录');
@@ -735,6 +830,9 @@
   /* ---------- 启动 ---------- */
   if (typeof document !== 'undefined') {
     initHoldings();
+    if (window.FX && typeof window.FX.ready === 'function') {
+      Promise.resolve(window.FX.ready()).then(refreshFxDisplay).catch(refreshFxDisplay);
+    }
     // 暴露给 index.html 的 switchIndex 调用
     window.renderHoldings = renderHoldings;
   }
@@ -746,6 +844,7 @@
       fmtPct, fmtMoney, fmtPrice, fmtPnl, formatRatePct, formatRateWan,
       FEE_DEFAULTS, ALL_ETF, MARKET_OF, loadHoldings, buyPremiumInfo, optionalPremium,
       holdingsPanelHTML, bindHoldingsPanel, renderHoldingsTable,
+      buyFxInfo, optionalFx, normalizeBuyFx, refreshFxDisplay,
       setHoldings: function (h) { HOLDINGS = h; },
       getHoldings: function () { return HOLDINGS; },
       isExpanded: function (code) { return EXPANDED.has(code); },
