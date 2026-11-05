@@ -45,6 +45,8 @@ IOPV_CLOSE_HOUR = 15
 IOPV_NAV_RATIO_RANGE = (0.5, 2.0)
 # 自算溢价与行情给出的溢价率允许的最大偏差（百分点）
 IOPV_RATE_TOLERANCE = 0.5
+# 快照报价与同日独立收盘价的最大允许差异（元）：拦下"停牌/延迟沿用旧价配新 IOPV"的跨日错配
+IOPV_PRICE_MATCH_TOLERANCE = 0.0015
 BEIJING = timezone(timedelta(hours=8))
 # 腾讯美股指数日线（用于交叉校验跟踪误差，免登录且稳定）
 US_INDEX_KLINE_API = 'https://web.ifzq.gtimg.cn/appstock/app/usfqkline/get'
@@ -252,11 +254,16 @@ def parse_iopv_quote(body):
         if len(fields) <= IOPV_QUOTE_NAV_FIELD:
             continue
         stamp = fields[IOPV_QUOTE_TIME_FIELD]
-        if not stamp or len(stamp) < 8:
+        try:
+            if len(stamp) != 14 or not stamp.isdigit():
+                continue
+            quote_time = datetime.strptime(stamp, '%Y%m%d%H%M%S').replace(tzinfo=BEIJING)
+        except ValueError:
             continue
-        date = f'{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]}'
-        if not is_valid_date(date):
+        # A post-close fetch can still return an intraday/halted quote.
+        if quote_time.hour < IOPV_CLOSE_HOUR or quote_time.weekday() >= 5:
             continue
+        date = quote_time.date().isoformat()
         try:
             price = float(fields[3])
             rate = float(fields[IOPV_QUOTE_RATE_FIELD])
@@ -279,6 +286,7 @@ def parse_iopv_quote(body):
             'iopv': round(iopv, 4),
             'price': round(price, 4),
             'premium': premium,
+            'quote_time': quote_time.isoformat(),
         }
     return snapshots
 
@@ -286,19 +294,13 @@ def parse_iopv_quote(body):
 def fetch_iopv_snapshot(codes, now=None):
     """Closing IOPV premium for on-exchange ETFs, keyed by code.
 
-    Only collected at or after the A-share close: an intraday price/IOPV pair
-    is not the session-close premium. Returns {} before the close or when the
-    source is unavailable so existing history is never overwritten with noise.
-    
-    Time window: Beijing 15:00 (close) to 23:00 same day. This prevents:
-    - Premature collection when Actions schedule drifts early (common 20~45min)
-    - Stale snapshot reuse when a next-morning catch-up run sees yesterday's quote
+    Validate the quote's timestamp, not the runner's hour. Delayed nightly and
+    next-morning runs may recover a previous close without relabelling its date.
+    Intraday, future and older-than-7-day quotes are rejected; merge also checks
+    the quote price against that date's independently fetched closing price.
     """
     local = (now or datetime.now(BEIJING)).astimezone(BEIJING)
     if not codes:
-        return {}
-    # Reject before close or after same-day cutoff (next morning belongs to new session)
-    if local.hour < IOPV_CLOSE_HOUR or local.hour >= 23:
         return {}
     url = IOPV_QUOTE_API + ','.join(codes)
 
@@ -312,7 +314,10 @@ def fetch_iopv_snapshot(codes, now=None):
     except Exception as exc:
         print(f'  [IOPV] snapshot unavailable: {exc}')
         return {}
-    snapshots = parse_iopv_quote(body)
+    snapshots = {
+        code: record for code, record in parse_iopv_quote(body).items()
+        if code in codes and timedelta(0) <= local - datetime.fromisoformat(record['quote_time']) <= timedelta(days=7)
+    }
     missing = [code for code in codes if code not in snapshots]
     if missing:
         print(f'  [IOPV] no usable snapshot for: {", ".join(missing)}')
@@ -457,8 +462,8 @@ def merge_etf_data(info, prices, navs, replace_all_nav=False, iopv_record=None):
 def merge_iopv_series(info, record, price_arr):
     """Append/overwrite one closing IOPV premium row keyed by trade date.
 
-    A snapshot older than the newest price date means a halted fund or a stale
-    quote line; it never becomes history.
+    Backfill only the snapshot's own date when its quote price matches the
+    independent daily close. Never attach a previous quote to a newer date.
     """
     rows = {
         item['date']: item
@@ -466,16 +471,21 @@ def merge_iopv_series(info, record, price_arr):
         if is_valid_date(item.get('date'))
     }
     if record and is_valid_date(record.get('date')):
-        newest_price = price_arr[-1]['date'] if price_arr else None
-        if newest_price and record['date'] >= newest_price:
-            rows[record['date']] = {
-                'date': record['date'],
-                'value': record['premium'],
-                'iopv': record['iopv'],
-            }
+        close = next((p.get('value') for p in price_arr if p.get('date') == record['date']), None)
+        try:
+            close, quote_price, iopv, premium = map(float, (close, record['price'], record['iopv'], record['premium']))
+            valid = (all(map(math.isfinite, (close, quote_price, iopv, premium)))
+                     and min(close, quote_price, iopv) > 0
+                     and abs(close - quote_price) <= IOPV_PRICE_MATCH_TOLERANCE
+                     and abs((close / iopv - 1) * 100 - premium) <= 0.01
+                     and abs(premium) <= MAX_ABS_PREMIUM)
+        except (ValueError, TypeError, KeyError):
+            valid = False
+        if valid:
+            # 只存稳定字段：采集时刻不入库，否则每轮都会产生 diff 触发无意义提交/部署
+            rows[record['date']] = {'date': record['date'], 'value': premium, 'iopv': iopv}
         else:
-            print(f'    [IOPV] ignored snapshot {record["date"]} older than '
-                  f'newest price {newest_price}')
+            print(f'    [IOPV] rejected snapshot {record["date"]}: missing or mismatched same-day close')
     return [rows[date] for date in sorted(rows)]
 
 

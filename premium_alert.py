@@ -116,9 +116,8 @@ def premium_comparison(history, price_date):
 def select_ranked_funds(root, price_date):
     """All four on-exchange groups, fresh and verified, highest premium first.
 
-    Prefers the IOPV series (same gauge as broker apps, available on the day)
-    and falls back to the published unit-NAV premium for funds whose IOPV
-    history has not been collected yet.
+    优先采用当日 IOPV 参考口径，缺失时回退同日已披露单位净值口径。
+    历史比较只使用与本次溢价相同的序列，不混合两个口径。
     """
     selected = []
     for label, filename in GROUPS:
@@ -126,9 +125,6 @@ def select_ranked_funds(root, price_date):
         if not data:
             raise ValueError(f'{filename} has no funds')
         for code, info in data.items():
-            premiums = info.get('premium') or []
-            if not premiums:
-                continue
             chosen = None
             for key in PREMIUM_SERIES:
                 history = verified_series(info, price_date, key)
@@ -138,14 +134,6 @@ def select_ranked_funds(root, price_date):
             if chosen is None:
                 continue
             key, history = chosen
-            if key == 'iopv_premium':
-                # IOPV 实测序列自 2026-10-08 才开始采集（每只仅数日），仅凭它算
-                # 历史均值恒为「数据不足」。历史段并入已披露净值口径——已披露
-                # 净值日的估算 IOPV 恰等于 price/NAV(T)，与页面 IOPV 口径走势
-                # 图同源；实测记录覆盖日以实测为准，环比保持 IOPV 对 IOPV。
-                published = verified_series(info, price_date, 'premium')
-                published.update(history)
-                history = published
             record = latest_record(info.get(key) or [], price_date)
             if record is None:
                 continue
@@ -155,7 +143,7 @@ def select_ranked_funds(root, price_date):
                 'group': label, 'code': code, 'name': info.get('name') or code,
                 'premium': history[price_date], 'price_date': price_date,
                 'series': key,
-                'nav_date': record.get('nav_date') or price_date,
+                'nav_date': price_date if price_date in nav_history else None,
                 'nav_premium': nav_history.get(price_date),
                 'iopv': record.get('iopv'),
                 'comparison': premium_comparison(history, price_date),
@@ -255,17 +243,19 @@ def prepare(root, state_path, now, output_path=None, env=None):
         return False
     today = alert_date(now)
     state = read_state(state_path)
-    if state.get('date') == today and state.get('status') == 'attempted':
-        print('[Alert] Today already sent; skip')
-        write_output(output_path, False)
-        return False
     price_date = latest_verified_date(root)
     if not price_date:
         print('[Alert] No verified premium data available; skip')
         write_output(output_path, False)
         return False
-    if state.get('price_date') == price_date and state.get('status') in ('reserved', 'attempted'):
-        print(f'[Alert] Session {price_date} already reported; skip')
+    if price_date > today or (price_date < today and local.hour < 22):
+        print(f'[Alert] Session {price_date} is not today; defer catch-up until 22:00')
+        write_output(output_path, False)
+        return False
+    # 数据日只能前进；补报旧日不能锁死稍后到达的当日数据，也不能回退重发。
+    if (state.get('status') in ('reserved', 'attempted')
+            and state.get('price_date', '') >= price_date):
+        print(f'[Alert] Session {price_date} already reserved/reported or older; skip')
         write_output(output_path, False)
         return False
     if not all(env.get(key) for key in REQUIRED_SECRETS):
@@ -344,11 +334,11 @@ def nav_value_text(item):
 def item_lines(item):
     previous, change, averages = comparison_cells(item)
     flag = '  ⚠ 低于5%，重点关注' if item.get('alert') else ''
-    gauge = 'IOPV口径，同券商App' if item.get('series') == 'iopv_premium' else '单位净值口径'
+    gauge = 'IOPV参考' if item.get('series') == 'iopv_premium' else '同日NAV'
     return [
         f'{item["group"]} | {item["name"]} ({item["code"]}){flag}',
         f'  当前溢价：{item["premium"]:+.4f}%（{gauge}，收盘日 {item["price_date"]}）',
-        f'  单位净值口径：{nav_value_text(item)}（净值日 {item["nav_date"]}）',
+        f'  单位净值口径：{nav_value_text(item)}（净值日 {item.get("nav_date") or "未披露"}）',
         f'  上一有效交易日：{previous}；变化：{change}',
         f'  近1个月平均：{averages[1]}',
         f'  近3个月平均：{averages[3]}',
@@ -359,22 +349,23 @@ def item_lines(item):
 
 def item_cells(item, position):
     previous, change, averages = comparison_cells(item)
+    gauge = 'IOPV参考' if item.get('series') == 'iopv_premium' else '同日NAV'
     return [str(position), item['group'], f'{item["name"]}（{item["code"]}）',
-            f'{item["premium"]:+.4f}%', nav_value_text(item), previous, change,
-            averages[1], averages[3], averages[12], item['nav_date']]
+            f'{item["premium"]:+.4f}%', gauge, nav_value_text(item), previous, change,
+            averages[1], averages[3], averages[12], item['price_date']]
 
 
-HEADINGS = ['排名', '类别', '基金（代码）', '当前溢价', '单位净值口径', '上一有效日', '变化',
+HEADINGS = ['排名', '类别', '基金（代码）', '当前溢价', '当前口径', '单位净值口径', '上一有效日', '变化',
             '近1个月均值', '近3个月均值', '近1年均值', '数据日']
 
 
 def series_label(board):
     keys = {item.get('series') for item in board['lowest'] + board['highest']}
     if keys == {'iopv_premium'}:
-        return 'IOPV 口径（收盘价 ÷ 当日基金份额参考净值，同券商 App / 雪球，当日可得）'
+        return 'IOPV 参考口径（收盘价 ÷ 当日采集的基金份额参考净值 − 1）'
     if keys == {'premium'}:
-        return '单位净值口径（收盘价 ÷ 同日已披露单位净值）'
-    return '优先 IOPV 口径，缺 IOPV 的基金回退单位净值口径'
+        return '同日NAV口径（收盘价 ÷ 同日已披露单位净值 − 1）'
+    return '混合口径排行：优先 IOPV 参考，缺失时回退同日NAV；请按每行口径区分'
 
 
 def render_table(items, ordered):
@@ -400,12 +391,16 @@ def build_message(board, today, recipient, sender):
     mail['From'] = sender
     mail['To'] = recipient
     alert_note = f'，其中 {board["alerts"]} 只低于 {THRESHOLD:g}%' if board['alerts'] else f'，无低于 {THRESHOLD:g}% 的标的'
-    mail['Subject'] = (f'场内ETF每日溢价播报｜发信 {today}｜'
+    catch_up = price_date < today
+    mail['Subject'] = (f'场内ETF每日溢价播报{"（跨日补报）" if catch_up else ""}｜发信 {today}｜'
                        f'数据日 {price_date}{alert_note}')
-    summary = [f'北京时间 {today} 收盘后播报：数据日 {price_date}（价格日与净值日一致），'
-               f'当日 {board["total"]} 只场内ETF有效'
+    summary = [f'北京时间 {today} 收盘后播报：数据日（价格日）{price_date}，'
+               f'该数据日 {board["total"]} 只场内ETF有效'
                f'{alert_note}。',
-               f'排序口径：{series_label(board)}。']
+               f'排序口径：{series_label(board)}。',
+               'IOPV 为参考净值，并非最终单位净值；来源及采集时点可能不同，不保证与券商 App 当前显示一致。']
+    if catch_up:
+        summary.insert(0, f'跨日补报警告：以下为 {price_date} 的历史数据，不是 {today} 当日行情。')
     low_plain, low_html = render_table(board['lowest'], board['lowest'])
     high_plain, high_html = render_table(
         board['highest'], sorted(board['highest'], key=lambda item: (-item['premium'], item['code'])))
@@ -433,7 +428,7 @@ def build_message(board, today, recipient, sender):
         *high_detail,
         *plain_blocks,
         '历史均值按对应日历区间内的有效交易日等权平均，排除本次收盘日；历史不足完整区间显示数据不足。',
-        '均值口径：已披露单位净值历史为主，最近数日（IOPV 采集期起）为实测 IOPV，与页面 IOPV 口径走势一致。',
+        '历史比较和均值仅使用该行当前口径的有效记录；IOPV 与同日NAV不拼接，记录不足显示数据不足。',
         '来源：本项目每日更新的收盘价与基金净值；QDII净值存在披露滞后，长假后可能补发旧数据日。',
         '仅作关注提醒，不构成投资建议。',
     ])
@@ -447,8 +442,8 @@ def build_message(board, today, recipient, sender):
     body.append(f'<h3>溢价最高 {len(board["highest"])} 只（降序）</h3>'
                 '<p>溢价越高，追高风险越大。</p>' + high_html)
     body.append('<p>历史均值按对应日历区间内的有效交易日等权平均，排除本次收盘日；'
-                '历史不足完整区间显示数据不足。均值口径以已披露单位净值历史为主，'
-                '最近数日（IOPV 采集期起）采用实测 IOPV，与页面 IOPV 口径走势一致。'
+                '历史不足完整区间显示数据不足。历史比较和均值仅使用该行当前口径的有效记录；'
+                'IOPV 与同日NAV不拼接，记录不足显示数据不足。'
                 '仅作关注提醒，不构成投资建议。</p>')
     mail.add_alternative(''.join(body) + '</body></html>', subtype='html')
     return mail

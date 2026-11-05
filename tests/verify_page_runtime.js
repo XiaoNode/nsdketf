@@ -146,8 +146,11 @@ check('sz159501 真实 IOPV 记录保留（>=4 天）',
 console.log('\n=== A2. IOPV 图表数据集（默认 1 年 + 全部跨度）===');
 try {
   const d1 = sandbox.buildIopvDatasets();
-  check('默认 1 年区间回推约一年（2025-10 附近起）',
-    d1.allDates[0] >= '2025-10-01' && d1.allDates[0] <= '2025-10-31', d1.allDates[0]);
+  // 起点随运行日期滚动，避免写死年份后在跨月/跨年时误报
+  const oneYearAgo = new Date(); oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+  const cutoff = oneYearAgo.toISOString().slice(0, 10);
+  check('默认 1 年区间回推约一年（相对今天）',
+    d1.allDates[0] >= cutoff && d1.allDates[0] <= new Date().toISOString().slice(0, 10), d1.allDates[0]);
   check('默认选中 2 只基金', d1.datasets.length === 2, d1.datasets.length);
   check('含估算标注点（历史段为估算）', d1.estDates.size > 100, d1.estDates.size);
   probe("currentRange='all'");

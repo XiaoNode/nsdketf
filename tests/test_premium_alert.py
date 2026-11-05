@@ -154,7 +154,7 @@ class AlertTests(unittest.TestCase):
         self.assertTrue(premium_alert.prepare(self.root, self.state, self.now, env=ENV))
         self.assertTrue(premium_alert.claim(self.root, self.state, self.now, env=ENV))
         # 长假后的第一次运行：同一数据日不再重发
-        later = datetime(2026, 10, 9, 20, 30, tzinfo=BJ)
+        later = datetime(2026, 10, 9, 22, 30, tzinfo=BJ)
         self.assertFalse(premium_alert.prepare(self.root, self.state, later, env=ENV))
 
     # ---------- 每个交易日都要发 ----------
@@ -280,7 +280,7 @@ class AlertTests(unittest.TestCase):
         self.assertIn('近1个月平均：数据不足', body)
         self.assertNotIn('2026-09-21)', body)
 
-    # ---------- IOPV 口径：当日可得，与券商 App 一致 ----------
+    # ---------- IOPV 参考口径：独立于同日 NAV ----------
 
     def add_iopv_session(self, day='2026-09-24', price=2.230, iopv=1.9796, value=12.649):
         file = self.root / 'etf_all.json'
@@ -290,43 +290,32 @@ class AlertTests(unittest.TestCase):
         info['iopv_premium'] = [{'date': day, 'value': value, 'iopv': iopv}]
         file.write_text(json.dumps(data), encoding='utf-8')
 
-    def test_iopv_digest_uses_published_history_for_period_averages(self):
-        """当期值取 IOPV，但历史均值必须由已披露净值的长序列支撑。
-
-        真实数据里 IOPV 实测仅自 2026-10-08 起（每只 4~5 条），若只用它算
-        历史窗口，近1个月/3个月/1年恒为「数据不足」。
-        """
-        published = self.write_long_history_fund(
+    def test_iopv_digest_does_not_pad_history_with_nav(self):
+        """长 NAV 历史不能冒充同口径的 IOPV 均值。"""
+        self.write_long_history_fund(
             '2025-09-01', {'2026-09-23': 9.0, '2026-09-24': 12.649})
         item = premium_alert.select_ranked_funds(self.root, '2026-09-24')[0]
         self.assertEqual(item['series'], 'iopv_premium')
         self.assertEqual(item['premium'], 12.649)
-        # 上一有效交易日：被同日 IOPV 覆盖，而不是已披露净值的 4.0%
         self.assertEqual(item['comparison']['previous_date'], '2026-09-23')
         self.assertEqual(item['comparison']['previous_premium'], 9.0)
+        self.assertEqual(item['comparison']['averages'], {1: None, 3: None, 12: None})
 
-        merged = dict(published)
-        merged['2026-09-23'] = 9.0
-        merged['2026-09-24'] = 12.649
-        prior = sorted((day, value) for day, value in merged.items() if day < '2026-09-24')
-        for months in (1, 3, 12):
-            start = premium_alert.months_ago(datetime(2026, 9, 24).date(), months).isoformat()
-            window = [value for day, value in prior if day >= start]
-            self.assertTrue(window, months)
-            average, count = item['comparison']['averages'][months]
-            self.assertEqual(count, len(window))
-            self.assertAlmostEqual(average, sum(window) / len(window), places=6)
-        # 一年窗口应有两百多个有效交易日，而不是「数据不足」
-        self.assertGreater(item['comparison']['averages'][12][1], 200)
+    def test_iopv_digest_does_not_use_nav_as_previous_session(self):
+        self.write_long_history_fund('2025-06-01', {'2026-09-24': 12.649})
+        comparison = premium_alert.select_ranked_funds(
+            self.root, '2026-09-24')[0]['comparison']
+        self.assertIsNone(comparison['previous_date'])
+        self.assertIsNone(comparison['previous_premium'])
+        self.assertEqual(comparison['averages'], {1: None, 3: None, 12: None})
 
-    def test_iopv_digest_keeps_incomplete_year_empty(self):
-        """历史不足完整一年时，近1年平均仍应诚实显示数据不足。"""
-        self.write_long_history_fund('2026-06-01', {'2026-09-24': 12.649})
-        averages = premium_alert.select_ranked_funds(
-            self.root, '2026-09-24')[0]['comparison']['averages']
-        self.assertIsNotNone(averages[1])
-        self.assertIsNotNone(averages[3])
-        self.assertIsNone(averages[12])
+    def test_iopv_digest_averages_only_its_own_history(self):
+        sessions = {'2025-09-23': 8.0, '2026-06-23': 6.0,
+                    '2026-08-23': 4.0, '2026-09-23': 9.0, '2026-09-24': 12.649}
+        self.write_long_history_fund('2025-06-01', sessions)
+        comparison = premium_alert.select_ranked_funds(
+            self.root, '2026-09-24')[0]['comparison']
+        self.assertEqual(comparison, premium_alert.premium_comparison(sessions, '2026-09-24'))
 
     def write_long_history_fund(self, start, iopv_sessions, today='2026-09-24'):
         """一只「已披露净值长历史 + 最近数日实测 IOPV」的基金（真实数据形态）。
@@ -372,7 +361,7 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(item['premium'], 12.649)
         # 该日尚无单位净值可核对，NAV 口径应诚实留空而不是套用旧净值
         self.assertIsNone(item['nav_premium'])
-        self.assertEqual(item['nav_date'], '2026-09-24')
+        self.assertIsNone(item['nav_date'])
 
     def test_verified_history_falls_back_to_nav_when_iopv_missing(self):
         self.write_funds()
@@ -396,6 +385,96 @@ class AlertTests(unittest.TestCase):
         self.assertIn('净值未披露', body)
         self.assertIn('12.649', body)
         self.assertIn('IOPV', premium_alert.series_label(board))
+
+    def test_iopv_only_funds_do_not_require_nav_history(self):
+        self.add_iopv_session()
+        file = self.root / 'etf_all.json'
+        data = json.loads(file.read_text(encoding='utf-8'))
+        info = next(iter(data.values()))
+        info.pop('premium')
+        info.pop('nav')
+        file.write_text(json.dumps(data), encoding='utf-8')
+        board = premium_alert.select_board(self.root, '2026-09-24')
+        self.assertEqual(board['total'], 1)
+        self.assertEqual(board['lowest'][0]['series'], 'iopv_premium')
+        self.assertEqual(board['lowest'][0]['premium'], 12.649)
+        self.assertIsNone(board['lowest'][0]['nav_premium'])
+        now = datetime(2026, 9, 24, 16, 30, tzinfo=BJ)
+        self.assertTrue(premium_alert.prepare(self.root, self.state, now, env=ENV))
+
+    def test_early_old_session_waits_without_reserving_then_sends_current_iopv(self):
+        for hour in (16, 20, 21):
+            now = datetime(2026, 9, 24, hour, 30, tzinfo=BJ)
+            self.assertFalse(premium_alert.prepare(self.root, self.state, now, env=ENV))
+            self.assertFalse(self.state.exists())
+        self.add_iopv_session()
+        now = datetime(2026, 9, 24, 21, 45, tzinfo=BJ)
+        self.assertTrue(premium_alert.prepare(self.root, self.state, now, env=ENV))
+        self.assertEqual(premium_alert.read_state(self.state)['price_date'], '2026-09-24')
+        self.assertTrue(premium_alert.claim(self.root, self.state, now, env=ENV))
+        self.assertFalse(premium_alert.prepare(self.root, self.state, now, env=ENV))
+
+    def test_late_catch_up_does_not_block_newer_session_or_allow_rollback(self):
+        now = datetime(2026, 9, 24, 22, 0, tzinfo=BJ)
+        self.assertTrue(premium_alert.prepare(self.root, self.state, now, env=ENV))
+        self.assertEqual(premium_alert.read_state(self.state)['price_date'], '2026-09-23')
+        self.assertTrue(premium_alert.claim(self.root, self.state, now, env=ENV))
+        self.assertFalse(premium_alert.claim(self.root, self.state, now, env=ENV))
+        self.assertFalse(premium_alert.prepare(self.root, self.state, now, env=ENV))
+        self.add_iopv_session()
+        self.assertTrue(premium_alert.prepare(self.root, self.state, now, env=ENV))
+        self.assertEqual(premium_alert.read_state(self.state)['price_date'], '2026-09-24')
+        with self.assertRaisesRegex(ValueError, 'claimed'):
+            premium_alert.send(self.root, self.state, now, env=ENV)
+        self.assertTrue(premium_alert.claim(self.root, self.state, now, env=ENV))
+        self.assertFalse(premium_alert.prepare(self.root, self.state, now, env=ENV))
+        self.write_funds()
+        self.assertFalse(premium_alert.prepare(self.root, self.state, now, env=ENV))
+        self.assertEqual(premium_alert.read_state(self.state)['price_date'], '2026-09-24')
+
+    def test_future_session_is_not_reserved(self):
+        self.add_iopv_session()
+        self.assertFalse(premium_alert.prepare(self.root, self.state, self.now, env=ENV))
+        self.assertFalse(self.state.exists())
+
+    def test_mixed_html_labels_each_row_and_uses_price_date(self):
+        self.write_funds()
+        self.add_iopv_session(day='2026-09-23', price=1.06, iopv=1.0, value=6.0)
+        board = premium_alert.select_board(self.root, '2026-09-23')
+        mail = premium_alert.build_message(board, '2026-09-23', ENV['ALERT_TO_EMAIL'],
+                                          ENV['ALERT_SMTP_USER'])
+        body = mail.get_body(preferencelist=('html',)).get_content()
+        self.assertIn('<th>当前口径</th>', body)
+        self.assertIn('<td>IOPV参考</td>', body)
+        self.assertIn('<td>同日NAV</td>', body)
+        self.assertIn('混合口径排行', body)
+        self.assertNotIn('价格日与净值日一致', body)
+        self.assertNotIn('同券商', body)
+        item = dict(board['lowest'][0], nav_date='2026-09-22')
+        self.assertEqual(premium_alert.item_cells(item, 1)[-1], '2026-09-23')
+
+    def test_november_fourth_old_nav_digest_is_explicit_catch_up(self):
+        """复现11/4收到11/3的18.6173%邮件；不能冒充11/4的App口径。"""
+        self.write_funds({filename: (18.6173, '2026-11-03', '2026-11-03')
+                          for _, filename in premium_alert.GROUPS})
+        early = datetime(2026, 11, 4, 16, 30, tzinfo=BJ)
+        late = datetime(2026, 11, 4, 22, 30, tzinfo=BJ)
+        self.assertFalse(premium_alert.prepare(self.root, self.state, early, env=ENV))
+        self.assertFalse(self.state.exists())
+        self.assertTrue(premium_alert.prepare(self.root, self.state, late, env=ENV))
+        board = premium_alert.select_board(self.root, '2026-11-03')
+        mail = premium_alert.build_message(board, '2026-11-04', ENV['ALERT_TO_EMAIL'],
+                                          ENV['ALERT_SMTP_USER'])
+        self.assertIn('跨日补报', mail['Subject'])
+        self.assertIn('数据日 2026-11-03', mail['Subject'])
+        for kind in ('plain', 'html'):
+            body = mail.get_body(preferencelist=(kind,)).get_content()
+            self.assertIn('跨日补报警告', body)
+            self.assertIn('不是 2026-11-04 当日行情', body)
+            self.assertIn('18.6173%', body)
+            self.assertIn('同日NAV', body)
+            self.assertNotIn('价格日与净值日一致', body)
+            self.assertNotIn('同券商', body)
 
     def test_calendar_month_end_clamps(self):
         self.assertEqual(premium_alert.months_ago(datetime(2026, 3, 31).date(), 1).isoformat(),

@@ -43,11 +43,26 @@ class IopvQuoteTests(unittest.TestCase):
         self.assertEqual(daily_update.parse_iopv_quote(''), {})
         self.assertEqual(daily_update.parse_iopv_quote('v_sz159501="a~b~c";'), {})
 
-    def test_intraday_run_collects_nothing(self):
-        with patch.object(daily_update, 'request_with_retry', side_effect=AssertionError('network')):
-            before_close = datetime(2026, 10, 8, 14, 30, tzinfo=BJ)
-            self.assertEqual(daily_update.fetch_iopv_snapshot(['sz159501'], now=before_close), {})
-            self.assertEqual(daily_update.fetch_iopv_snapshot([], now=before_close), {})
+    def test_intraday_quote_is_never_a_close(self):
+        with patch.object(daily_update, 'request_with_retry', return_value=self.quote_body(stamp='20261008143000')):
+            for hour in (14, 16, 23):
+                self.assertEqual(daily_update.fetch_iopv_snapshot(['sz159501'], now=datetime(2026, 10, 8, hour, 30, tzinfo=BJ)), {})
+
+    def test_late_night_and_next_morning_recover_original_date(self):
+        for now in (datetime(2026, 10, 8, 23, 22, tzinfo=BJ), datetime(2026, 10, 9, 0, 33, tzinfo=BJ), datetime(2026, 10, 9, 8, 20, tzinfo=BJ)):
+            with patch.object(daily_update, 'request_with_retry', return_value=self.quote_body()):
+                result = daily_update.fetch_iopv_snapshot(['sz159501'], now=now)
+            self.assertEqual(result['sz159501']['date'], '2026-10-08')
+            self.assertEqual(result['sz159501']['quote_time'], '2026-10-08T15:00:00+08:00')
+
+    def test_future_and_too_old_quotes_rejected(self):
+        for now in (datetime(2026, 10, 8, 14, 30, tzinfo=BJ), datetime(2026, 10, 16, 8, 20, tzinfo=BJ)):
+            with patch.object(daily_update, 'request_with_retry', return_value=self.quote_body()):
+                self.assertEqual(daily_update.fetch_iopv_snapshot(['sz159501'], now=now), {})
+
+    def test_invalid_timestamps_rejected(self):
+        for stamp in ('20261008', '20261008159999', '20261308150000', '20261010150000'):
+            self.assertEqual(daily_update.parse_iopv_quote(self.quote_body(stamp=stamp)), {})
 
     def test_source_failure_returns_empty(self):
         after_close = datetime(2026, 10, 8, 20, 30, tzinfo=BJ)
@@ -66,17 +81,26 @@ class MergeIopvTests(unittest.TestCase):
 
     def test_snapshot_is_stored_once_per_date(self):
         record = {'date': '2026-10-08', 'iopv': 1.9646, 'price': 2.213, 'premium': 12.6402}
-        first = daily_update.merge_iopv_series(self.info(), record, [{'date': '2026-10-08'}])
+        first = daily_update.merge_iopv_series(self.info(), record, [{'date': '2026-10-08', 'value': 2.213}])
         self.assertEqual(first, [{'date': '2026-10-08', 'value': 12.6402, 'iopv': 1.9646}])
         rows = [{'date': '2026-10-08', 'value': 12.6402, 'iopv': 1.9646}]
         again = daily_update.merge_iopv_series({'iopv_premium': rows}, record,
-                                               [{'date': '2026-10-08'}])
+                                               [{'date': '2026-10-08', 'value': 2.213}])
         self.assertEqual(again, first)
 
     def test_stale_snapshot_is_ignored(self):
         record = {'date': '2026-09-29', 'iopv': 1.9, 'price': 2.2, 'premium': 15.0}
-        result = daily_update.merge_iopv_series(self.info(), record, [{'date': '2026-10-08'}])
+        result = daily_update.merge_iopv_series(self.info(), record, [{'date': '2026-10-08', 'value': 2.213}])
         self.assertEqual(result, [])
+
+    def test_backfill_requires_matching_historical_close(self):
+        record = {'date': '2026-10-08', 'iopv': 1.9646, 'price': 2.213, 'premium': 12.6402}
+        prices = [{'date': '2026-10-08', 'value': 2.213}, {'date': '2026-10-09', 'value': 2.3}]
+        rows = daily_update.merge_iopv_series(self.info(), record, prices)
+        self.assertEqual([r['date'] for r in rows], ['2026-10-08'])
+        existing = {'iopv_premium': rows}
+        for change in ({'price': 2.1}, {'iopv': float('nan')}, {'premium': 19.85}):
+            self.assertEqual(daily_update.merge_iopv_series(existing, {**record, **change}, prices), rows)
 
     def test_monthly_output_and_change_detection_include_iopv(self):
         info = self.info()
