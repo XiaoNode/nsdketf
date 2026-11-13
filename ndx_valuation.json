@@ -782,12 +782,12 @@
       "checked": "2026-11-13"
     },
     {
-      "pe": 24.37,
+      "pe": 24.34,
       "forward_pe": 19.46,
       "forward_pe_pct": 42.09,
       "pe_history_date": "2026-11-13",
       "forward_history_date": "2026-08-05",
-      "coverage_trailing": 88.97,
+      "coverage_trailing": 88.89,
       "coverage_forward": 99.54,
       "date": "2026-11-13",
       "checked": "2026-11-13"
