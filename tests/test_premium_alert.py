@@ -238,9 +238,12 @@ class AlertTests(unittest.TestCase):
         comparison = premium_alert.premium_comparison(history, '2026-09-23')
         self.assertEqual(comparison['previous_date'], '2026-09-22')
         self.assertEqual(comparison['previous_premium'], 3.0)
-        self.assertEqual(comparison['averages'][1], (2.5, 2))
-        self.assertEqual(comparison['averages'][3], (3.0, 3))
-        self.assertEqual(comparison['averages'][12], (3.75, 4))
+        # 不传 measured_days 时三天都是实测，第三位即实测天数
+        self.assertEqual(comparison['averages'][1], (2.5, 2, 2))
+        self.assertEqual(comparison['averages'][3], (3.0, 3, 3))
+        self.assertEqual(comparison['averages'][12], (3.75, 4, 4))
+        mixed = premium_alert.premium_comparison(history, '2026-09-23', {'2026-09-22'})
+        self.assertEqual(mixed['averages'][1], (2.5, 2, 1))
         item = {'group': '纳斯达克100', 'name': '示例', 'code': 'sz000001',
                 'premium': 1.0, 'price_date': '2026-09-23',
                 'nav_date': '2026-09-23', 'comparison': comparison, 'alert': True}
@@ -254,6 +257,47 @@ class AlertTests(unittest.TestCase):
         self.assertIn('近1个月平均：+2.5000%（2个有效交易日）', body)
         self.assertIn('近3个月平均：+3.0000%（3个有效交易日）', body)
         self.assertIn('近1年平均：+3.7500%（4个有效交易日）', body)
+
+    def test_short_window_names_the_series_start_instead_of_a_bare_shortage(self):
+        """「数据不足」必须能区分采集故障与序列本身起步晚（新基金/回补起点）。"""
+        # 序列自 2026-03-30 起，近 1 年窗口必然不完整
+        history = {'2026-03-30': 1.0, '2026-10-20': 2.5, '2026-11-18': 2.0}
+        comparison = premium_alert.premium_comparison(history, '2026-11-19')
+        self.assertIsNone(comparison['averages'][12])
+        self.assertEqual(comparison['shortfall'][12], {'start': '2026-03-30', 'days': 3})
+        item = {'group': '道琼斯', 'name': '示例', 'code': 'sh513400',
+                'premium': 1.0, 'price_date': '2026-11-19', 'series': 'iopv_premium',
+                'nav_date': None, 'comparison': comparison, 'alert': False}
+        _, _, averages = premium_alert.comparison_cells(item)
+        self.assertEqual(averages[12], '数据不足（序列自 2026-03-30 起，区间内仅3个交易日，未覆盖完整区间）')
+
+        # 完全没有任何历史时，不带误导性的区间说明
+        empty = premium_alert.premium_comparison({}, '2026-11-19')
+        self.assertEqual(empty['shortfall'][1], {'start': None, 'days': 0})
+        bare = {'group': '道琼斯', 'name': '示例', 'code': 'sh513400',
+                'premium': 1.0, 'price_date': '2026-11-19', 'series': 'iopv_premium',
+                'nav_date': None, 'comparison': empty, 'alert': False}
+        self.assertEqual(premium_alert.comparison_cells(bare)[2], {1: '数据不足', 3: '数据不足', 12: '数据不足'})
+
+    def test_estimate_backed_averages_disclose_measured_days(self):
+        """校准估算并入均值时，括号内必须写明其中多少天是实测。"""
+        comparison = {'previous_date': '2026-09-22', 'previous_premium': 3.0,
+                      'averages': {1: (2.5, 4, 1), 3: (3.0, 6, 2), 12: (3.75, 8, 3)},
+                      'shortfall': {}}
+        item = {'group': '纳斯达克100', 'name': '示例', 'code': 'sz159501',
+                'premium': 1.0, 'price_date': '2026-09-23', 'series': 'iopv_premium',
+                'nav_date': None, 'comparison': comparison, 'alert': False,
+                'measured_days': {'2026-09-22'}}
+        previous, _, averages = premium_alert.comparison_cells(item)
+        # 上一有效日为估算时也要标出来，避免被读成实测对实测
+        self.assertEqual(previous, '+3.0000% (2026-09-22)')
+        self.assertEqual(averages[1], '+2.5000%（4个交易日，其中实测1天）')
+        self.assertEqual(averages[3], '+3.0000%（6个交易日，其中实测2天）')
+        self.assertEqual(averages[12], '+3.7500%（8个交易日，其中实测3天）')
+
+        estimated_prev = dict(comparison, previous_date='2026-09-20')
+        estimated_item = dict(item, comparison=estimated_prev)
+        self.assertIn('，估算', premium_alert.comparison_cells(estimated_item)[0])
 
     def test_invalid_history_and_insufficient_periods(self):
         self.write_funds({'etf_all.json': (4.0, '2026-09-23', '2026-09-23')})

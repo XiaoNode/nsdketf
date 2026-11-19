@@ -96,20 +96,73 @@ def verified_premiums(info, through_date):
     return verified_series(info, through_date, 'premium')
 
 
-def premium_comparison(history, price_date):
-    """Compare previous available session; averages exclude today's alert session."""
+def estimated_series(info, through_date):
+    """Calibrated closing-IOPV *estimates* for days without a real snapshot.
+
+    Same gauge as ``iopv_premium`` (price over reference NAV), reconstructed as
+    ``NAV x index drift`` and bias-calibrated against real snapshots by the
+    updater. Kept separate from measured rows so the digest can say how many
+    points in an average are estimates rather than observations.
+    """
+    totals = ((info.get('iopv_est_bias') or {}).get('bias'), (info.get('iopv_est_bias') or {}).get('samples'))
+    bias_applied = isinstance(totals[0], (int, float)) and totals[1]
+    estimates = {}
+    for record in info.get('iopv_premium_est') or []:
+        day, value = record.get('date'), record.get('value')
+        if not daily_update.is_valid_date(day) or day > through_date:
+            continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(value) or abs(value) > daily_update.MAX_ABS_PREMIUM:
+            continue
+        # An uncalibrated estimate carries a known systematic gap; refuse it
+        # rather than mix an unadjusted gauge into a measured history.
+        if not bias_applied:
+            continue
+        estimates[day] = value
+    return estimates
+
+
+def iopv_history(info, through_date):
+    """Measured IOPV premiums plus calibrated estimates, measured days winning."""
+    measured = verified_series(info, through_date, 'iopv_premium')
+    estimates = estimated_series(info, through_date)
+    history = dict(estimates)
+    history.update(measured)
+    return history
+
+
+def premium_comparison(history, price_date, measured_days=None):
+    """Compare previous available session; averages exclude today's alert session.
+
+    ``measured_days`` lets the digest report how many averaged sessions are real
+    snapshots instead of reconstructed estimates.
+    """
     prior = sorted((day, value) for day, value in history.items() if day < price_date)
     previous_day, previous_value = prior[-1] if prior else (None, None)
     today = datetime.strptime(price_date, '%Y-%m-%d').date()
     averages = {}
+    # Why a window is short, so "数据不足" is distinguishable from a collection fault:
+    # the series itself may simply start later than the window (new fund / late backfill).
+    shortfall = {}
     for months in (1, 3, 12):
         start = months_ago(today, months).isoformat()
-        values = [value for day, value in prior if start <= day]
+        values = [day for day, value in prior if start <= day]
         # An incomplete inception window must not be passed off as a full-period average.
-        averages[months] = (sum(values) / len(values), len(values)) if values and prior[0][0] <= start else None
+        if values and prior[0][0] <= start:
+            total = sum(history[day] for day in values) / len(values)
+            measured = (len([d for d in values if d in measured_days])
+                        if measured_days is not None else len(values))
+            averages[months] = (total, len(values), measured)
+        else:
+            averages[months] = None
+            shortfall[months] = {'start': prior[0][0] if prior else None,
+                                 'days': len(values)}
     return {
         'previous_date': previous_day, 'previous_premium': previous_value,
-        'averages': averages,
+        'averages': averages, 'shortfall': shortfall,
     }
 
 
@@ -117,7 +170,8 @@ def select_ranked_funds(root, price_date):
     """All four on-exchange groups, fresh and verified, highest premium first.
 
     优先采用当日 IOPV 参考口径，缺失时回退同日已披露单位净值口径。
-    历史比较只使用与本次溢价相同的序列，不混合两个口径。
+    IOPV 口径历史 = 实测快照 + 偏差校准后的估算值（同一口径），实测日优先；
+    不使用单位净值口径的数值，避免两个口径混算。
     """
     selected = []
     for label, filename in GROUPS:
@@ -127,7 +181,10 @@ def select_ranked_funds(root, price_date):
         for code, info in data.items():
             chosen = None
             for key in PREMIUM_SERIES:
-                history = verified_series(info, price_date, key)
+                if key == 'iopv_premium':
+                    history = iopv_history(info, price_date)
+                else:
+                    history = verified_series(info, price_date, key)
                 if price_date in history:
                     chosen = (key, history)
                     break
@@ -139,14 +196,16 @@ def select_ranked_funds(root, price_date):
                 continue
             nav_history = (verified_premiums(info, price_date) if key == 'iopv_premium'
                            else history)
+            measured_days = set(verified_series(info, price_date, 'iopv_premium')) if key == 'iopv_premium' else set(history)
             selected.append({
                 'group': label, 'code': code, 'name': info.get('name') or code,
                 'premium': history[price_date], 'price_date': price_date,
                 'series': key,
+                'measured_days': measured_days,
                 'nav_date': price_date if price_date in nav_history else None,
                 'nav_premium': nav_history.get(price_date),
                 'iopv': record.get('iopv'),
-                'comparison': premium_comparison(history, price_date),
+                'comparison': premium_comparison(history, price_date, measured_days),
             })
     return sorted(selected, key=lambda item: (-item['premium'], item['code']))
 
@@ -216,8 +275,20 @@ def select_candidates(root, price_date):
                   key=lambda item: (item['premium'], item['code']))
 
 
+def _public_payload(node):
+    """Strip internal bookkeeping (e.g. ``measured_days`` sets) before hashing."""
+    if isinstance(node, dict):
+        return {key: _public_payload(value) for key, value in node.items()
+                if key != 'measured_days'}
+    if isinstance(node, (list, tuple)):
+        return [_public_payload(value) for value in node]
+    return node
+
+
 def fingerprint(candidates):
-    payload = json.dumps(candidates, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    """Digest of the public market values only, so identical data hashes equal."""
+    payload = json.dumps(_public_payload(candidates), ensure_ascii=False,
+                         sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
 
@@ -314,15 +385,34 @@ def claim(root, state_path, now, output_path=None, env=None):
 
 def comparison_cells(item):
     comparison = item['comparison']
-    previous = (f'{comparison["previous_premium"]:+.4f}% ({comparison["previous_date"]})'
-                if comparison['previous_date'] else '数据不足')
-    change = (f'{item["premium"] - comparison["previous_premium"]:+.4f} 个百分点'
-              if comparison['previous_date'] else '数据不足')
+    measured_days = item.get('measured_days')
+    previous_date = comparison['previous_date']
+    if not previous_date:
+        previous = '数据不足'
+        change = '数据不足'
+    else:
+        # Mark a reconstructed previous session so the change is not read as observation-vs-observation.
+        estimated = measured_days is not None and previous_date not in measured_days
+        previous = (f'{comparison["previous_premium"]:+.4f}% ({previous_date}'
+                    f'{"，估算" if estimated else ""})')
+        change = f'{item["premium"] - comparison["previous_premium"]:+.4f} 个百分点'
     averages = {}
+    shortfall = comparison.get('shortfall') or {}
     for months in (1, 3, 12):
         result = comparison['averages'][months]
-        averages[months] = (f'{result[0]:+.4f}%（{result[1]}个有效交易日）'
-                            if result else '数据不足')
+        if not result:
+            # Name the real cause: not a fetch failure, the series just starts later.
+            gap = shortfall.get(months) or {}
+            if gap.get('start'):
+                averages[months] = (f'数据不足（序列自 {gap["start"]} 起，'
+                                    f'区间内仅{gap["days"]}个交易日，未覆盖完整区间）')
+            else:
+                averages[months] = '数据不足'
+            continue
+        total, count, measured = result
+        # Say how many sessions are reconstructed estimates, never hide it.
+        detail = f'{count}个有效交易日' if measured == count else f'{count}个交易日，其中实测{measured}天'
+        averages[months] = f'{total:+.4f}%（{detail}）'
     return previous, change, averages
 
 
@@ -427,8 +517,10 @@ def build_message(board, today, recipient, sender):
         '明细：',
         *high_detail,
         *plain_blocks,
-        '历史均值按对应日历区间内的有效交易日等权平均，排除本次收盘日；历史不足完整区间显示数据不足。',
-        '历史比较和均值仅使用该行当前口径的有效记录；IOPV 与同日NAV不拼接，记录不足显示数据不足。',
+        '历史均值按对应日历区间内的有效交易日等权平均，排除本次收盘日；'
+        '历史不足完整区间显示数据不足，并写明该序列的起始日（新基金或回补起点较晚，不是采集故障）。',
+        '均值与上一有效日只用同一口径：IOPV 口径 = 实测快照 + 偏差校准后的估算值（实测日优先），'
+        '括号内标明实测天数；不使用单位净值口径数值参与 IOPV 均值。',
         '来源：本项目每日更新的收盘价与基金净值；QDII净值存在披露滞后，长假后可能补发旧数据日。',
         '仅作关注提醒，不构成投资建议。',
     ])
@@ -442,8 +534,10 @@ def build_message(board, today, recipient, sender):
     body.append(f'<h3>溢价最高 {len(board["highest"])} 只（降序）</h3>'
                 '<p>溢价越高，追高风险越大。</p>' + high_html)
     body.append('<p>历史均值按对应日历区间内的有效交易日等权平均，排除本次收盘日；'
-                '历史不足完整区间显示数据不足。历史比较和均值仅使用该行当前口径的有效记录；'
-                'IOPV 与同日NAV不拼接，记录不足显示数据不足。'
+                '历史不足完整区间显示数据不足，并写明该序列的起始日'
+                '（新基金或回补起点较晚，不是采集故障）。均值与上一有效日只用同一口径：'
+                'IOPV 口径 = 实测快照 + 偏差校准后的估算值（实测日优先），括号内标明实测天数；'
+                '不使用单位净值口径数值参与 IOPV 均值。'
                 '仅作关注提醒，不构成投资建议。</p>')
     mail.add_alternative(''.join(body) + '</body></html>', subtype='html')
     return mail
